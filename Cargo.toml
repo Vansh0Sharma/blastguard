@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 description = "A local command-policy and ephemeral Git worktree safety tool for AI coding agents"
 license = "Apache-2.0"
-license-file = "LICENSE"
 readme = "README.md"
 keywords = ["security", "cli", "git", "shell", "developer-tools"]
 categories = ["command-line-utilities", "development-tools"]
