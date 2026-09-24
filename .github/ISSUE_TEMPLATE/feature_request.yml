@@ -1,0 +1,34 @@
+name: Feature request
+description: Propose a narrowly scoped improvement to BlastGuard.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the safety problem first. Proposals must preserve BlastGuard's documented trust boundaries.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What concrete developer-safety problem should BlastGuard address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful behavior, including fail-closed cases.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Security and compatibility impact
+      description: Note changes to policy, secrets, Git state, execution, platforms, or public interfaces.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe workarounds or smaller alternatives.

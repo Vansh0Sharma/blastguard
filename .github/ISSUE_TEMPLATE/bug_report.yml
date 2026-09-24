@@ -1,0 +1,57 @@
+name: Bug report
+description: Report reproducible incorrect behavior in BlastGuard.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not disclose vulnerabilities or real secrets here. Follow SECURITY.md for private security reporting.
+  - type: input
+    id: version
+    attributes:
+      label: BlastGuard version
+      description: Paste the output of `blastguard --version` or identify the commit.
+      placeholder: blastguard 0.1.0 or commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Explain what happened and what you expected. Remove credentials and sensitive paths.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include the smallest safe command sequence or hook payload that reproduces the issue.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Redacted output
+      description: Paste relevant output after removing secrets and personal information.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, tokens, private keys, and sensitive repository content.
+          required: true
+        - label: This is not a vulnerability report requiring private handling.
+          required: true

@@ -1,0 +1,22 @@
+# Copy this file to `blastguard.toml` in the directory passed as --cwd.
+# Patterns use shell-style globs and match the complete command string.
+# Built-in hard blocks cannot be overridden. Among matching user entries,
+# block wins over ask, and ask wins over allow.
+# During `sandbox exec`, an allow rule also cannot suppress the mandatory ask
+# for an explicit worktree-boundary path. The default file is loaded from the
+# clean source repository, not from mutable worktree changes.
+
+[[overrides]]
+pattern = "cargo test*"
+decision = "allow"
+reason = "The local Rust test suite is approved for this repository."
+
+[[overrides]]
+pattern = "terraform apply*"
+decision = "ask"
+reason = "Infrastructure changes require a developer confirmation."
+
+[[overrides]]
+pattern = "git push*--force*"
+decision = "block"
+reason = "Force pushes are prohibited by repository policy."

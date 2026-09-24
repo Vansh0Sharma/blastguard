@@ -1,0 +1,23 @@
+/target/
+
+# Local BlastGuard policy and Claude settings
+/blastguard.toml
+/.claude/settings.local.json
+
+# Credentials and local environment files
+.env
+.env.*
+*.key
+*.pem
+
+# Generated demo recordings
+/docs/*.gif
+/docs/*.mp4
+/docs/*.webm
+
+# Editor and operating-system files
+.DS_Store
+/.idea/
+/.vscode/
+*.swp
+*~
