@@ -269,11 +269,16 @@ fn run_process(
         command.process_group(0);
     }
 
+    #[cfg(target_os = "linux")]
+    enable_child_subreaper()?;
+
     let started = Instant::now();
     let mut child = command
         .spawn()
         .map_err(|error| ExecutionError::internal(format!("starting Bash: {error}")))?;
     let process_group = child.id();
+    #[cfg(unix)]
+    validate_process_group(&mut child, process_group)?;
     let stdout = child
         .stdout
         .take()
@@ -469,7 +474,7 @@ fn terminate_running_child(
     child: &mut Child,
     process_group: u32,
 ) -> Result<ExitStatus, ExecutionError> {
-    signal_process_group(process_group, "-TERM")?;
+    signal_process_group(process_group, libc::SIGTERM)?;
     let deadline = Instant::now() + Duration::from_millis(250);
     while Instant::now() < deadline {
         if let Some(status) = child.try_wait().map_err(|error| {
@@ -479,7 +484,7 @@ fn terminate_running_child(
         }
         thread::sleep(Duration::from_millis(10));
     }
-    signal_process_group(process_group, "-KILL")?;
+    signal_process_group(process_group, libc::SIGKILL)?;
     child.wait().map_err(|error| {
         ExecutionError::internal(format!("waiting after forced termination: {error}"))
     })
@@ -500,26 +505,30 @@ fn terminate_running_child(
 
 #[cfg(unix)]
 fn cleanup_process_group(process_group: u32) -> Result<bool, ExecutionError> {
+    reap_adopted_group_members(process_group)?;
     if !process_group_exists(process_group)? {
         return Ok(true);
     }
-    signal_process_group(process_group, "-TERM")?;
+    signal_process_group(process_group, libc::SIGTERM)?;
     let deadline = Instant::now() + Duration::from_millis(250);
     while Instant::now() < deadline {
+        reap_adopted_group_members(process_group)?;
         if !process_group_exists(process_group)? {
             return Ok(true);
         }
         thread::sleep(Duration::from_millis(10));
     }
-    signal_process_group(process_group, "-KILL")?;
+    signal_process_group(process_group, libc::SIGKILL)?;
     let deadline = Instant::now() + Duration::from_secs(1);
     while Instant::now() < deadline {
+        reap_adopted_group_members(process_group)?;
         if !process_group_exists(process_group)? {
             return Ok(true);
         }
         thread::sleep(Duration::from_millis(10));
     }
-    Ok(false)
+    reap_adopted_group_members(process_group)?;
+    Ok(!process_group_exists(process_group)?)
 }
 
 #[cfg(not(unix))]
@@ -529,40 +538,140 @@ fn cleanup_process_group(_process_group: u32) -> Result<bool, ExecutionError> {
 
 #[cfg(unix)]
 fn process_group_exists(process_group: u32) -> Result<bool, ExecutionError> {
-    let status = kill_command("-0", process_group)?;
-    Ok(status.success())
-}
-
-#[cfg(unix)]
-fn signal_process_group(process_group: u32, signal: &str) -> Result<(), ExecutionError> {
-    let status = kill_command(signal, process_group)?;
-    if status.success() || !process_group_exists(process_group)? {
-        Ok(())
-    } else {
-        Err(ExecutionError::internal(
-            "the child process group could not be terminated",
-        ))
+    let process_group = process_group_id(process_group)?;
+    loop {
+        // A negative PID addresses every process in the process group.
+        if unsafe { libc::kill(-process_group, 0) } == 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::ESRCH) => return Ok(false),
+            Some(libc::EPERM) => return Ok(true),
+            Some(libc::EINTR) => continue,
+            _ => {
+                return Err(ExecutionError::internal(format!(
+                    "checking the child process group: {error}"
+                )))
+            }
+        }
     }
 }
 
 #[cfg(unix)]
-fn kill_command(signal: &str, process_group: u32) -> Result<ExitStatus, ExecutionError> {
-    let executable = if Path::new("/bin/kill").is_file() {
-        "/bin/kill"
+fn signal_process_group(process_group: u32, signal: libc::c_int) -> Result<(), ExecutionError> {
+    let process_group = process_group_id(process_group)?;
+    loop {
+        // Invoke kill(2) directly so a negative process-group ID cannot be
+        // reinterpreted as an option by a platform-specific `kill` binary.
+        if unsafe { libc::kill(-process_group, signal) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::ESRCH) => return Ok(()),
+            Some(libc::EINTR) => continue,
+            _ => {
+                return Err(ExecutionError::internal(format!(
+                    "signaling the child process group: {error}"
+                )))
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn process_group_id(process_group: u32) -> Result<libc::pid_t, ExecutionError> {
+    let process_group = libc::pid_t::try_from(process_group)
+        .map_err(|_| ExecutionError::internal("the child process-group ID was out of range"))?;
+    if process_group <= 0 {
+        return Err(ExecutionError::internal(
+            "the child process-group ID was invalid",
+        ));
+    }
+    Ok(process_group)
+}
+
+#[cfg(unix)]
+fn validate_process_group(child: &mut Child, process_group: u32) -> Result<(), ExecutionError> {
+    let expected = process_group_id(process_group)?;
+    loop {
+        let actual = unsafe { libc::getpgid(expected) };
+        if actual == expected {
+            return Ok(());
+        }
+        if actual >= 0 {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(ExecutionError::internal(
+                "Bash did not start in its dedicated process group",
+            ));
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EINTR) => continue,
+            Some(libc::ESRCH) => {
+                let exited = child.try_wait().map_err(|wait_error| {
+                    ExecutionError::internal(format!(
+                        "checking Bash after process-group setup: {wait_error}"
+                    ))
+                })?;
+                if exited.is_some() {
+                    // The requested PGID is still the correct cleanup target:
+                    // descendants can outlive a shell that exits immediately.
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(ExecutionError::internal(format!(
+            "validating the Bash process group: {error}"
+        )));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn enable_child_subreaper() -> Result<(), ExecutionError> {
+    if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) } == 0 {
+        Ok(())
     } else {
-        "/usr/bin/kill"
-    };
-    Command::new(executable)
-        .arg(signal)
-        .arg(format!("-{process_group}"))
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|error| {
-            ExecutionError::internal(format!("signaling the child process group: {error}"))
-        })
+        Err(ExecutionError::internal(format!(
+            "enabling descendant reaping: {}",
+            io::Error::last_os_error()
+        )))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn reap_adopted_group_members(process_group: u32) -> Result<(), ExecutionError> {
+    let process_group = process_group_id(process_group)?;
+    loop {
+        let mut status = 0;
+        let waited = unsafe { libc::waitpid(-process_group, &mut status, libc::WNOHANG) };
+        if waited > 0 {
+            continue;
+        }
+        if waited == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::ECHILD) => return Ok(()),
+            Some(libc::EINTR) => continue,
+            _ => {
+                return Err(ExecutionError::internal(format!(
+                    "reaping child process-group members: {error}"
+                )))
+            }
+        }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn reap_adopted_group_members(_process_group: u32) -> Result<(), ExecutionError> {
+    Ok(())
 }
 
 #[cfg(unix)]

@@ -241,25 +241,23 @@ fn timeout_terminates_background_descendant_in_the_process_group() {
     let managed = worktree(&repo);
     let output = exec(
         &repo,
-        "sleep 30 & echo $! > child.pid; wait",
+        "(trap '' TERM; printf ready > child.ready; sleep 2; printf escaped > post-timeout-side-effect) & while test ! -s child.ready; do sleep 0.01; done; wait",
         &["--timeout-seconds", "1"],
     );
     assert_eq!(output.status.code(), Some(43));
     let value = json(&output);
     assert_eq!(value["execution_state"], "timed_out");
     assert_eq!(value["process"]["termination_complete"], true);
-    let pid = fs::read_to_string(managed.join("child.pid"))
-        .ok()
-        .and_then(|text| text.trim().parse::<u32>().ok())
-        .unwrap_or(0);
-    assert_ne!(pid, 0);
-    let alive = Command::new("/bin/kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    assert!(!alive);
+    assert_eq!(
+        fs::read_to_string(managed.join("child.ready"))
+            .ok()
+            .as_deref(),
+        Some("ready")
+    );
+    assert!(
+        !managed.join("post-timeout-side-effect").exists(),
+        "background descendant performed its delayed side effect after timeout"
+    );
 }
 
 #[test]
