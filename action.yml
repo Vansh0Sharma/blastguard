@@ -1,0 +1,45 @@
+name: BlastGuard static policy check
+description: Analyze supplied Bash text without executing it; optionally save a redacted JSON report.
+author: Vansh Sharma
+inputs:
+  command:
+    description: Bash command text to analyze as data, never to execute.
+    required: true
+  working-directory:
+    description: Existing workspace-relative directory used for analysis and local policy.
+    required: false
+    default: '.'
+  policy-pack:
+    description: Optional balanced, strict, or ci pack; empty preserves the existing default policy.
+    required: false
+    default: ''
+  fail-on:
+    description: block fails only blocked decisions; ask also fails decisions requiring review. Errors always fail.
+    required: false
+    default: block
+  report-path:
+    description: Optional new JSON file relative to working-directory; existing files and symlinks are refused.
+    required: false
+    default: ''
+outputs:
+  decision:
+    description: allow, ask, block, or error.
+    value: ${{ steps.analyze.outputs.decision }}
+  exit-code:
+    description: Original analysis status, or 64/70 for action input/operational errors; distinct from step status.
+    value: ${{ steps.analyze.outputs.exit-code }}
+  report-path:
+    description: Workspace-relative report path, emitted only after successful publication.
+    value: ${{ steps.analyze.outputs.report-path }}
+runs:
+  using: composite
+  steps:
+    - id: analyze
+      shell: bash
+      env:
+        BG_ACTION_COMMAND: ${{ inputs.command }}
+        BG_ACTION_DIRECTORY: ${{ inputs.working-directory }}
+        BG_ACTION_PACK: ${{ inputs.policy-pack }}
+        BG_ACTION_FAIL_ON: ${{ inputs.fail-on }}
+        BG_ACTION_REPORT: ${{ inputs.report-path }}
+      run: bash --noprofile --norc "$GITHUB_ACTION_PATH/scripts/github-action.sh"

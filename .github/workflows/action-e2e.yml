@@ -1,0 +1,130 @@
+name: Action end-to-end
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  action:
+    name: Fresh runner / ${{ matrix.case }}
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: allow
+            command: printf data > blastguard-should-not-exist
+            fail-on: block
+            pack: ''
+            report: ''
+            decision: allow
+            code: '0'
+            outcome: success
+          - case: ask-permitted
+            command: cargo test
+            fail-on: block
+            pack: strict
+            report: ''
+            decision: ask
+            code: '10'
+            outcome: success
+          - case: ask-rejected
+            command: cargo test
+            fail-on: ask
+            pack: strict
+            report: ''
+            decision: ask
+            code: '10'
+            outcome: failure
+          - case: block
+            command: printf '' | base64 -d | sh
+            fail-on: block
+            pack: ''
+            report: ''
+            decision: block
+            code: '20'
+            outcome: failure
+          - case: dangerous-data
+            command: |
+              printf '%s' "$(touch blastguard-should-not-exist)" > blastguard-should-not-exist
+              printf '' | base64 -d | sh
+            fail-on: block
+            pack: ''
+            report: ''
+            decision: block
+            code: '20'
+            outcome: failure
+          - case: redacted-report
+            command: printf '%s' 'api_key=synthetic-ci-value-123456'
+            fail-on: block
+            pack: ''
+            report: reports/analysis.json
+            decision: ask
+            code: '10'
+            outcome: success
+          - case: missing-cache
+            command: cargo test
+            fail-on: block
+            pack: ''
+            report: ''
+            decision: error
+            code: '70'
+            outcome: failure
+    steps:
+      - name: Check out the exact revision under test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Start with an empty Cargo dependency cache
+        run: |
+          mkdir "$RUNNER_TEMP/blastguard-cargo"
+          printf 'CARGO_HOME=%s/blastguard-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          mkdir e2e-workspace
+
+      # Keep these provisioning commands identical to the external-user guide.
+      # rustup is part of the hosted Ubuntu image; the stable toolchain is explicit.
+      - name: Install the documented compiler and Rust toolchain
+        working-directory: ${{ runner.temp }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends build-essential
+          command -v rustup >/dev/null
+          rustup toolchain install stable --profile minimal
+          rustc --version
+          cargo --version
+          cc --version
+
+      - name: Populate the cache from the pinned lockfile
+        if: matrix.case != 'missing-cache'
+        working-directory: ${{ runner.temp }}
+        run: cargo fetch --locked --manifest-path "$GITHUB_WORKSPACE/Cargo.toml"
+
+      - name: Analyze data using the real local composite action
+        id: analysis
+        uses: ./
+        # Test harness only: every expected failure is asserted below using outcome.
+        continue-on-error: true
+        with:
+          command: ${{ matrix.command }}
+          working-directory: e2e-workspace
+          fail-on: ${{ matrix.fail-on }}
+          policy-pack: ${{ matrix.pack }}
+          report-path: ${{ matrix.report }}
+
+      - name: Verify decisions, outputs, no execution, and report redaction
+        if: always()
+        env:
+          CHECK_OUTPUTS: ${{ toJSON(steps.analysis.outputs) }}
+          CHECK_OUTCOME: ${{ steps.analysis.outcome }}
+          EXPECT_DECISION: ${{ matrix.decision }}
+          EXPECT_CODE: ${{ matrix.code }}
+          EXPECT_OUTCOME: ${{ matrix.outcome }}
+          EXPECT_REPORT: ${{ matrix.report }}
+        run: python3 tests/action_e2e_verify.py

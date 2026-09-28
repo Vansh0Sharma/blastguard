@@ -49,6 +49,19 @@ Controlled-execution changes must additionally cover all three policy decisions,
 
 Claude integration changes must be checked against the current official [hooks reference](https://code.claude.com/docs/en/hooks), [CLI reference](https://code.claude.com/docs/en/cli-reference), and [settings precedence](https://code.claude.com/docs/en/settings). Cover fake-child cwd and exact argv preservation, inline settings/exec-form schema, launcher-only context, source preservation, exit propagation, all three policy decisions, malformed/oversized input, missing/locked/drifted/tampered sessions, payload path tampering, hard-block precedence, redaction, and the internal watchdog. Keep a test assertion that public documentation does not describe native Claude Bash as brokered or output-redacted.
 
+GitHub Action changes are covered by `cargo test --test github_action_cli` and
+the internal adapter unit tests. Keep input interpolation out of shell source,
+forward Bash text as one argv value, preserve exit/JSON agreement checks and
+non-overridable hard blocks, and test no-execution markers, source preservation,
+redaction, output allowlisting and path-escape/no-clobber failures. Bootstrap
+tests use a fake Cargo that copies the already-built test binary. The
+`Action end-to-end` workflow must also pass on the exact proposed revision: it
+provisions Rust/compiler prerequisites, starts with an empty Cargo cache, fetches
+locked dependencies, and exercises the real `uses: ./` composite action. Its
+missing-cache negative test must fail with `error/70`, not silently fetch online.
+Do not introduce network-enabled build fallback,
+global-binary fallback, workflow timeouts, uploads or runner-environment dumps.
+
 ## Security expectations
 
 Onboarding checks are covered by `cargo test --test onboarding_cli`. Doctor tests
