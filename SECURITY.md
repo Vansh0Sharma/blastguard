@@ -58,6 +58,22 @@ Launcher metadata contains only a safe session ID and canonical state-directory 
 
 Offline policy packs contain only the existing whole-command glob overrides, never allow rules. They add to local/explicit configuration with the same strongest-match precedence and non-overridable hard blocks. `balanced` adds no rules; `strict` returns at least `ask` for every command; `ci` blocks selected transfer/publication text and requires automation to reject every nonzero analysis result. These case-sensitive text patterns can overmatch and miss alternative tools/spellings; they are not executable identity checks, binary allowlists, network controls, or guarantees against arbitrary binaries. Pack flags do not alter the launcher/hook binding or automatically select native Claude policy. See [the integration guide](docs/integrations/claude-code.md).
 
+The [GitHub Action](docs/integrations/github-actions.md) is static analysis only:
+it submits one command string as one argument to the pinned binary's `analyze`
+subcommand with a cleared environment. It does not execute/intercept that command,
+invoke Git/Claude, create sessions, inspect runner secrets, or provide runner
+isolation. The composite bootstrap builds trusted source offline outside the
+checkout; toolchains, Cargo configuration and cached dependency build scripts
+must be trusted. Only named inputs and required runner file metadata are read.
+Logs contain fixed diagnostics/decisions, and action outputs contain only the
+decision, status and validated report path. Optional reports reuse pattern
+redaction; they are not safe storage for arbitrary secrets. Reports reject
+traversal, absolute paths, symlinks and existing destinations, and publish complete
+JSON atomically without overwriting. Concurrent filesystem replacement remains
+outside the guarantee. The action cannot protect credentials already available
+to the workflow or replace session-bound local Claude hooks. Configure `fail-on:
+ask` when every non-allow decision must fail, particularly with the `ci` pack.
+
 Use an OS sandbox, least-privilege credentials, repository protections, and human review as independent controls.
 
 Controlled execution currently fails closed on non-Unix platforms because equivalent process-tree termination is not implemented. On supported Unix systems, a reported `termination_complete` means the created process group disappeared after signaling; it does not prove that every descendant remained in that group or that external effects were reversed.

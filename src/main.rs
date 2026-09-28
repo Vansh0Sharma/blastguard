@@ -31,6 +31,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Internal composite-action adapter; not an execution entry point.
+    #[command(hide = true)]
+    GithubAction,
     /// Analyze a shell command without executing it.
     Analyze {
         /// Shell command to analyze.
@@ -208,6 +211,7 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<u8, (BlastguardError, bool)> {
     match cli.command {
+        Command::GithubAction => Ok(blastguard::github_action::run()),
         Command::Analyze {
             command,
             cwd,

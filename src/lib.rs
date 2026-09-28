@@ -10,6 +10,7 @@ pub mod execution_error;
 pub mod execution_journal;
 pub mod execution_render;
 pub mod git;
+pub mod github_action;
 pub mod isolation;
 pub mod manifest;
 pub mod model;
