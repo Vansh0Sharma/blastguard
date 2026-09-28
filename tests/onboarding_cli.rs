@@ -52,6 +52,16 @@ impl Fixture {
 
     fn git(&self, args: &[&str]) {
         let output = Command::new("git")
+            // Git 2.55 can leave detached post-commit maintenance removing
+            // .git/objects/maintenance.lock after commit returns. Finish fixture
+            // housekeeping before taking snapshots; do not disable maintenance
+            // or change the configuration inherited by the doctor under test.
+            .args([
+                "-c",
+                "maintenance.autoDetach=false",
+                "-c",
+                "gc.autoDetach=false",
+            ])
             .arg("-C")
             .arg(&self.repo)
             .args(args)
@@ -60,6 +70,34 @@ impl Fixture {
             .output()
             .unwrap();
         assert!(output.status.success(), "fixture Git command failed");
+    }
+
+    fn read_only_status(&self) -> Vec<u8> {
+        // Independent observation, including staged/untracked/ignored paths.
+        // Optional index refreshes and filesystem monitors must not mutate the
+        // fixture while we measure whether doctor itself was read-only.
+        let output = Command::new("git")
+            .args([
+                "--no-optional-locks",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-C",
+            ])
+            .arg(&self.repo)
+            .args([
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--ignored",
+            ])
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "fixture Git status failed");
+        output.stdout
     }
 
     fn commit(&self) {
@@ -133,12 +171,22 @@ fn passed(value: &Value, id: &str) -> bool {
         .unwrap()
 }
 
+// Include the entire fixture: source paths (including untracked/ignored files),
+// .git/index/config/objects/worktrees, and any new BlastGuard state or config.
+// Reads can update access times; compare modification times, bytes, modes and
+// symlink targets, and never print file contents in failure diagnostics.
 type Snapshot = BTreeMap<PathBuf, (Vec<u8>, u32, SystemTime)>;
 fn snapshot(root: &Path) -> Snapshot {
     fn visit(path: &Path, entries: &mut Snapshot) {
         let metadata = fs::symlink_metadata(path).unwrap();
         let bytes = if metadata.is_file() {
             fs::read(path).unwrap()
+        } else if metadata.file_type().is_symlink() {
+            fs::read_link(path)
+                .unwrap()
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec()
         } else {
             Vec::new()
         };
@@ -159,6 +207,37 @@ fn snapshot(root: &Path) -> Snapshot {
     let mut entries = BTreeMap::new();
     visit(root, &mut entries);
     entries
+}
+
+fn assert_snapshot_unchanged(before: &Snapshot, after: &Snapshot, context: &str) {
+    let mut changes = Vec::new();
+    for (path, old) in before {
+        let path_label = blastguard::render::safe_text(&path.display().to_string());
+        match after.get(path) {
+            None => changes.push(format!("removed: {path_label}")),
+            Some(new) => {
+                if old.0 != new.0 {
+                    changes.push(format!("contents changed: {path_label}"));
+                }
+                if old.1 != new.1 {
+                    changes.push(format!("type/permissions changed: {path_label}"));
+                }
+                if old.2 != new.2 {
+                    changes.push(format!(
+                        "mtime changed: {path_label} ({:?} -> {:?})",
+                        old.2, new.2
+                    ));
+                }
+            }
+        }
+    }
+    for path in after.keys().filter(|path| !before.contains_key(*path)) {
+        changes.push(format!(
+            "created: {}",
+            blastguard::render::safe_text(&path.display().to_string())
+        ));
+    }
+    assert!(changes.is_empty(), "{context}:\n{}", changes.join("\n"));
 }
 
 #[test]
@@ -244,9 +323,10 @@ fn doctor_success_has_versioned_schema_and_never_launches_claude_or_mutates_stat
     let human = fixture.run(&["claude", "doctor"]);
     assert_eq!(human.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&human.stdout).contains("ready for evaluation"));
-    assert!(
-        before == snapshot(&fixture.root),
-        "doctor changed fixture contents, permissions, or modification times"
+    assert_snapshot_unchanged(
+        &before,
+        &snapshot(&fixture.root),
+        "doctor changed fixture contents, permissions, or modification times",
     );
 }
 
@@ -298,6 +378,7 @@ fn doctor_distinguishes_invalid_input_from_missing_prerequisites() {
 #[test]
 fn doctor_uses_creation_cleanliness_and_repository_restrictions_without_writing() {
     for kind in [
+        "clean",
         "unstaged",
         "staged",
         "untracked",
@@ -312,6 +393,7 @@ fn doctor_uses_creation_cleanliness_and_repository_restrictions_without_writing(
         let fixture = Fixture::new();
         let mut target = fixture.repo.clone();
         match kind {
+            "clean" => {}
             "unstaged" | "staged" => {
                 fs::write(fixture.repo.join("tracked.txt"), "changed\n").unwrap();
                 if kind == "staged" {
@@ -342,20 +424,45 @@ fn doctor_uses_creation_cleanliness_and_repository_restrictions_without_writing(
             _ => unreachable!(),
         }
         let before = snapshot(&fixture.root);
+        let status_before = fixture.read_only_status();
+        assert_snapshot_unchanged(
+            &before,
+            &snapshot(&fixture.root),
+            &format!("status observation mutated state: {kind}"),
+        );
+        if kind == "clean" {
+            assert!(status_before.is_empty(), "clean fixture has Git changes");
+        }
         let output = fixture
             .command()
             .args(["claude", "doctor", "--json", "--repo"])
             .arg(target)
             .output()
             .unwrap();
-        assert_eq!(output.status.code(), Some(30), "restriction: {kind}");
-        assert!(
-            !passed(&json(&output), "source_preconditions"),
+        let clean = kind == "clean";
+        assert_eq!(
+            output.status.code(),
+            Some(if clean { 0 } else { 30 }),
             "restriction: {kind}"
         );
+        assert_eq!(
+            passed(&json(&output), "source_preconditions"),
+            clean,
+            "restriction: {kind}"
+        );
+        assert_snapshot_unchanged(
+            &before,
+            &snapshot(&fixture.root),
+            &format!("doctor mutated state: {kind}"),
+        );
         assert!(
-            before == snapshot(&fixture.root),
-            "doctor mutated state: {kind}"
+            status_before == fixture.read_only_status(),
+            "doctor changed Git status: {kind}"
+        );
+        assert_snapshot_unchanged(
+            &before,
+            &snapshot(&fixture.root),
+            &format!("post-doctor status observation mutated state: {kind}"),
         );
     }
 }
@@ -406,7 +513,11 @@ fn doctor_does_not_run_git_clean_filters_or_fsmonitor() {
     assert_eq!(output.status.code(), Some(30));
     assert!(!passed(&json(&output), "source_preconditions"));
     assert!(!marker.exists());
-    assert!(before == snapshot(&fixture.root));
+    assert_snapshot_unchanged(
+        &before,
+        &snapshot(&fixture.root),
+        "doctor ran a Git filter/monitor or mutated state",
+    );
 }
 
 fn assert_safe(output: &Output, token: &str) {
