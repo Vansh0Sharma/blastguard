@@ -5,8 +5,9 @@ use std::{
     process::ExitCode,
 };
 
+use blastguard::policy_packs::{self, PolicyPack};
 use blastguard::{
-    analyze, claude, claude_hook, config::Config, error::BlastguardError, execution,
+    analyze, claude, claude_doctor, claude_hook, config::Config, error::BlastguardError, execution,
     execution_error, execution_render, model::Decision, redaction, render, sandbox, sandbox_render,
 };
 use clap::{error::ErrorKind, Parser, Subcommand};
@@ -38,12 +39,20 @@ enum Command {
         /// Working directory in which the command would run.
         #[arg(long)]
         cwd: PathBuf,
+        /// Add an embedded policy pack to the existing configuration.
+        #[arg(long, value_enum)]
+        policy_pack: Option<PolicyPack>,
         /// Emit the stable JSON schema instead of a terminal card.
         #[arg(long)]
         json: bool,
     },
     /// Act as a Claude Code PreToolUse hook, reading one JSON object from stdin.
     ClaudeHook,
+    /// Discover offline curated policy packs.
+    Policy {
+        #[command(subcommand)]
+        command: PolicyCommand,
+    },
     /// Launch Claude Code in a managed worktree or run its policy hook.
     Claude {
         #[command(subcommand)]
@@ -58,6 +67,13 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ClaudeCommand {
+    /// Read-only checks before creating a session; does not launch Claude.
+    Doctor {
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Launch Claude Code in an active managed worktree.
     Start {
         #[arg(long)]
@@ -76,6 +92,22 @@ enum ClaudeCommand {
     },
     /// Process one Claude Code PreToolUse Bash hook event from stdin.
     Hook,
+}
+
+#[derive(Subcommand)]
+enum PolicyCommand {
+    /// List available embedded policy packs and versions.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print a pack as valid TOML, or a versioned JSON envelope.
+    Show {
+        #[arg(value_enum)]
+        name: PolicyPack,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -124,6 +156,9 @@ enum SandboxCommand {
         id: String,
         #[arg(long)]
         command: String,
+        /// Add an embedded policy pack to the clean source configuration.
+        #[arg(long, value_enum)]
+        policy_pack: Option<PolicyPack>,
         /// Approve an `ask` decision for this invocation only.
         #[arg(long)]
         approve: bool,
@@ -140,7 +175,7 @@ fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
-            let message = redaction::redact(&error.to_string()).text;
+            let message = render::safe_text(&error.to_string());
             if matches!(
                 error.kind(),
                 ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
@@ -155,7 +190,7 @@ fn main() -> ExitCode {
     match run(cli) {
         Ok(code) => ExitCode::from(code),
         Err((error, hook_mode)) => {
-            let message = redaction::redact(&error.to_string()).text;
+            let message = render::safe_text(&error.to_string());
             let _ = writeln!(io::stderr(), "BlastGuard: {message}");
             ExitCode::from(if hook_mode {
                 // Claude Code documents status 2 as a blocking hook error.
@@ -173,13 +208,18 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<u8, (BlastguardError, bool)> {
     match cli.command {
-        Command::Analyze { command, cwd, json } => {
+        Command::Analyze {
+            command,
+            cwd,
+            json,
+            policy_pack,
+        } => {
             if !cwd.is_dir() {
                 let path = redaction::redact(&cwd.display().to_string()).text;
                 return Err((BlastguardError::InvalidCwd(path), false));
             }
-            let config =
-                Config::load(cli.config.as_deref(), &cwd).map_err(|error| (error, false))?;
+            let config = Config::load_with_pack(cli.config.as_deref(), &cwd, policy_pack)
+                .map_err(|error| (error, false))?;
             let analysis = analyze(&command, &cwd, &config).map_err(|error| (error, false))?;
             let output = if json {
                 render::json(&analysis).map_err(|error| (error, false))?
@@ -192,6 +232,31 @@ fn run(cli: Cli) -> Result<u8, (BlastguardError, bool)> {
                 Decision::Ask => EXIT_ASK,
                 Decision::Block => EXIT_BLOCK,
             })
+        }
+        Command::Policy { command } => {
+            let output = match command {
+                PolicyCommand::List { json: true } => policy_packs::list_json(),
+                PolicyCommand::List { json: false } => Ok(policy_packs::all()
+                    .iter()
+                    .map(|pack| {
+                        let description = pack.description();
+                        format!(
+                            "{} {}: {}",
+                            pack.name(),
+                            description.version,
+                            description.summary
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")),
+                PolicyCommand::Show { name, json: true } => policy_packs::show_json(name),
+                PolicyCommand::Show { name, json: false } => {
+                    name.config().map(|_| name.source().to_owned())
+                }
+            }
+            .map_err(|error| (error, false))?;
+            println!("{output}");
+            Ok(EXIT_ALLOW)
         }
         Command::ClaudeHook => {
             let request =
@@ -229,6 +294,21 @@ enum ClaudeFailureMode {
 
 fn run_claude(command: ClaudeCommand) -> Result<u8, (BlastguardError, ClaudeFailureMode)> {
     match command {
+        ClaudeCommand::Doctor { repo, json } => {
+            let report = claude_doctor::inspect(repo.as_deref())
+                .map_err(|error| (error, ClaudeFailureMode::Command))?;
+            let output = if json {
+                claude_doctor::json(&report).map_err(|error| (error, ClaudeFailureMode::Command))?
+            } else {
+                claude_doctor::human(&report)
+            };
+            println!("{output}");
+            Ok(if report.ready {
+                EXIT_ALLOW
+            } else {
+                claude_doctor::PREREQUISITE_EXIT
+            })
+        }
         ClaudeCommand::Hook => {
             let request = claude_hook::read_request(&mut io::stdin())
                 .map_err(|error| (error, ClaudeFailureMode::Hook))?;
@@ -336,19 +416,23 @@ fn run_sandbox(
         SandboxCommand::Exec {
             id,
             command,
+            policy_pack,
             approve,
             timeout_seconds,
             max_output_bytes,
             json,
         } => {
-            let prepared = execution::prepare(execution::PrepareRequest {
-                session_id: &id,
-                command: &command,
-                approve,
-                timeout_seconds,
-                max_output_bytes,
-                config_path: config,
-            })?;
+            let prepared = execution::prepare_with_pack(
+                execution::PrepareRequest {
+                    session_id: &id,
+                    command: &command,
+                    approve,
+                    timeout_seconds,
+                    max_output_bytes,
+                    config_path: config,
+                },
+                policy_pack,
+            )?;
             if !json {
                 writeln!(
                     io::stdout(),

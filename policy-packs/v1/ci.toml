@@ -1,0 +1,33 @@
+# BlastGuard ci policy pack, version 1.0.0.
+# For analysis: automation must reject every nonzero decision (including ask=10).
+# These conservative whole-command text globs can overmatch quoted text.
+# They do not provide network containment or detect all transfer programs.
+[[overrides]]
+pattern = "*curl*"
+decision = "block"
+reason = "CI pack: command text containing curl requires an interactive workflow."
+
+[[overrides]]
+pattern = "*wget*"
+decision = "block"
+reason = "CI pack: command text containing wget requires an interactive workflow."
+
+[[overrides]]
+pattern = "*ssh*"
+decision = "block"
+reason = "CI pack: command text containing ssh requires an interactive workflow."
+
+[[overrides]]
+pattern = "*scp*"
+decision = "block"
+reason = "CI pack: command text containing scp requires an interactive workflow."
+
+[[overrides]]
+pattern = "*cargo publish*"
+decision = "block"
+reason = "CI pack: Cargo publication text is prohibited."
+
+[[overrides]]
+pattern = "*npm publish*"
+decision = "block"
+reason = "CI pack: npm publication text is prohibited."

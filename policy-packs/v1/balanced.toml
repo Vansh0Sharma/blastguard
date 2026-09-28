@@ -1,0 +1,4 @@
+# BlastGuard balanced policy pack, version 1.0.0.
+# Recommended starting point: preserve the built-in allow/ask/block decisions.
+# No extra overrides. Existing local configuration still applies.
+overrides = []

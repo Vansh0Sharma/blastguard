@@ -9,6 +9,7 @@ use crate::{redaction, sandbox_error::SandboxError};
 
 pub struct Git {
     cwd: PathBuf,
+    read_only: bool,
 }
 
 pub struct GitOutput {
@@ -19,7 +20,18 @@ pub struct GitOutput {
 
 impl Git {
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
-        Self { cwd: cwd.into() }
+        Self {
+            cwd: cwd.into(),
+            read_only: false,
+        }
+    }
+
+    /// Suppress optional index refreshes and lazy object downloads during diagnostics.
+    pub fn read_only(cwd: impl Into<PathBuf>) -> Self {
+        Self {
+            cwd: cwd.into(),
+            read_only: true,
+        }
     }
 
     pub fn checked(&self, operation: &str, args: &[&str]) -> Result<Vec<u8>, SandboxError> {
@@ -105,6 +117,24 @@ impl Git {
         }
         for (key, value) in env {
             command.env(key, value);
+        }
+        if self.read_only {
+            command
+                .env("GIT_OPTIONAL_LOCKS", "0")
+                .env("GIT_NO_LAZY_FETCH", "1");
+            // Git trace destinations can otherwise create files even for
+            // read-only subcommands. Do not inherit them for diagnostics.
+            for (key, _) in std::env::vars_os() {
+                if key.to_string_lossy().starts_with("GIT_TRACE") {
+                    command.env_remove(key);
+                }
+            }
+            // Removing the variables alone would fall back to trace2 targets
+            // in system/global Git configuration. Explicitly disable those too.
+            command
+                .env("GIT_TRACE2", "0")
+                .env("GIT_TRACE2_EVENT", "0")
+                .env("GIT_TRACE2_PERF", "0");
         }
 
         let mut child = command.spawn().map_err(|error| {

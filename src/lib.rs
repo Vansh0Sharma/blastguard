@@ -1,6 +1,7 @@
 //! BlastGuard's reusable policy engine.
 
 pub mod claude;
+pub mod claude_doctor;
 pub mod claude_hook;
 pub mod config;
 pub mod error;
@@ -13,6 +14,7 @@ pub mod isolation;
 pub mod manifest;
 pub mod model;
 pub mod policy;
+pub mod policy_packs;
 pub mod redaction;
 pub mod render;
 pub mod sandbox;

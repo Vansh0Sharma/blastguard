@@ -64,55 +64,38 @@ $ blastguard sandbox accept --id review-1
 
 ## Claude Code integration
 
-BlastGuard can launch an installed Claude Code CLI in a validated worktree and install a session-scoped `PreToolUse` hook without editing project, user, or global settings:
+Start with a read-only environment check, then follow the [five-minute Claude Code guide](docs/integrations/claude-code.md) for session creation, hook verification, policy packs, review, and cleanup:
 
 ```sh
-blastguard sandbox create --repo . --id claude-review
-blastguard claude hook-config --id claude-review --json
-blastguard claude start --id claude-review -- --model sonnet
-blastguard sandbox diff --id claude-review
-# Choose exactly one after review:
-blastguard sandbox accept --id claude-review
-# blastguard sandbox reject --id claude-review
+blastguard claude doctor --repo .
+blastguard policy list
 ```
-
-Arguments after `--` are passed to Claude in their original order. BlastGuard reserves Claude's `--settings` argument because it supplies an inline, per-launch hook configuration using Claude's documented settings mechanism. The launcher passes only the session ID and canonical state-directory path to the hook, keeps a launch lock while Claude runs, preserves Claude's numeric exit status, and never auto-accepts or auto-rejects.
-
-The implementation was checked on 2026-09-24 against the official Claude Code documentation:
-
-- [Hooks reference](https://code.claude.com/docs/en/hooks): `PreToolUse`, Bash input, permission decisions, command-hook configuration, exit status, and timeout behavior.
-- [CLI reference](https://code.claude.com/docs/en/cli-reference): the session-scoped `--settings` argument.
-- [Settings reference](https://code.claude.com/docs/en/settings): settings locations and precedence.
-
-Confirm the generated hook in Claude's `/hooks` view and manually test a known denial before relying on it. Claude documents hook process-start failure and hook timeout as non-blocking for `PreToolUse`; BlastGuard's shorter internal watchdog can fail closed for its own ordinary failures, but cannot close that upstream boundary.
-
-### Native Claude hook versus `sandbox exec`
 
 | Capability | Native Claude hook mode | `sandbox exec` mode |
 | --- | --- | --- |
-| Worktree routing | Claude starts in the validated worktree | Bash starts in the validated worktree |
-| Policy gate | `PreToolUse` returns `allow`, `ask`, or `deny` | Same engine; `ask` also requires `--approve` |
-| Executor | Claude Code | BlastGuard |
-| Environment | Claude's launch environment | Cleared, fixed minimal environment |
-| Output controls | None provided by BlastGuard | Combined byte limit, sanitization, pattern redaction |
-| Runtime controls | Claude-controlled | Timeout and best-effort Unix process-group cleanup |
-| Journal | None | Metadata only; no command or output text |
+| Policy | Session-bound `PreToolUse` | Same engine; asks require `--approve` |
+| Execution | Claude in the managed worktree | BlastGuard in the managed worktree |
+| Output/runtime controls | Claude-controlled | Bounded capture, pattern redaction, timeout |
 
-Native Claude Bash is policy-gated, not brokered. Claude's hook contract does not let BlastGuard rewrite the tool invocation into `sandbox exec`. BlastGuard does not capture, bound, sanitize, journal, or redact Bash output when Claude executes Bash natively.
+Native Claude Bash is policy-gated, not brokered. BlastGuard does not capture, bound, sanitize, journal, or redact Bash output when Claude executes Bash natively. Doctor does not prove hook enforcement; verify a harmless denial in the installed client. See the guide for the upstream hook timeout/start-failure boundary and setup using the official [hooks](https://code.claude.com/docs/en/hooks), [CLI](https://code.claude.com/docs/en/cli-reference), and [settings](https://code.claude.com/docs/en/settings) documentation.
 
 ## Command reference
 
 ```text
-blastguard analyze --command <shell> --cwd <path> [--json]
+blastguard analyze --command <shell> --cwd <path> [--policy-pack <balanced|strict|ci>] [--json]
+blastguard policy list [--json]
+blastguard policy show <balanced|strict|ci> [--json]
 blastguard sandbox create [--repo <path>] [--id <session-id>]
 blastguard sandbox status --id <session-id> [--json]
 blastguard sandbox diff --id <session-id> [--json]
 blastguard sandbox exec --id <session-id> --command <shell> [--approve]
+                        [--policy-pack <balanced|strict|ci>]
                         [--timeout-seconds <1..300>]
                         [--max-output-bytes <1..16777216>] [--json]
 blastguard sandbox accept --id <session-id>
 blastguard sandbox reject --id <session-id>
 blastguard sandbox list [--repo <path>] [--json]
+blastguard claude doctor [--repo <path>] [--json]
 blastguard claude start --id <session-id> [-- <claude arguments...>]
 blastguard claude hook-config --id <session-id> [--json]
 blastguard claude hook
@@ -129,7 +112,7 @@ Run lifecycle commands from the source repository or one of its Git worktrees. C
 | `0` | Success or policy `allow` |
 | `10` | Policy `ask` |
 | `20` | Policy `block` |
-| `30` | Repository precondition or invalid sandbox ID |
+| `30` | Repository precondition, invalid sandbox ID, or doctor prerequisite failure |
 | `31` | Missing, duplicate, invalid, tampered, or stale session state |
 | `32` | Active or stale session/repository lock |
 | `33` | Source repository changed since session creation |
@@ -157,6 +140,8 @@ By default, BlastGuard loads `blastguard.toml` from the analyzed directory. Sele
 5. default built-in policy.
 
 The safest matching user rule wins. An allow rule may suppress an ordinary built-in `ask`, but cannot downgrade a hard block such as recognized secret exfiltration, recursive forced deletion, or decode-and-execute behavior. See [`blastguard.example.toml`](blastguard.example.toml).
+
+Optional [local policy packs](policy-packs/README.md) add rules to this configuration; selecting no pack preserves existing behavior. Pack flags apply to `analyze` and `sandbox exec`, not the session-bound Claude launcher/hook.
 
 ## Security boundaries
 

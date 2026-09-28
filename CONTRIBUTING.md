@@ -19,6 +19,7 @@ cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 cargo build --release
+git diff --check
 ```
 
 Run the disposable end-to-end demonstration as a separate check:
@@ -49,6 +50,15 @@ Controlled-execution changes must additionally cover all three policy decisions,
 Claude integration changes must be checked against the current official [hooks reference](https://code.claude.com/docs/en/hooks), [CLI reference](https://code.claude.com/docs/en/cli-reference), and [settings precedence](https://code.claude.com/docs/en/settings). Cover fake-child cwd and exact argv preservation, inline settings/exec-form schema, launcher-only context, source preservation, exit propagation, all three policy decisions, malformed/oversized input, missing/locked/drifted/tampered sessions, payload path tampering, hard-block precedence, redaction, and the internal watchdog. Keep a test assertion that public documentation does not describe native Claude Bash as brokered or output-redacted.
 
 ## Security expectations
+
+Onboarding checks are covered by `cargo test --test onboarding_cli`. Doctor tests
+must snapshot repository/Git metadata and prove no Claude launch, filter execution,
+configuration write, or optional index/trace write. Keep stable JSON schema and
+redacted/control-safe diagnostic tests. Embedded policy pack changes must remain
+valid existing-format TOML, test default equivalence and additive precedence,
+and never introduce an allow rule. Test hard blocks with broad user allow rules
+and prove denied/ask broker commands do not execute. Do not install persistent
+hooks or change launcher session binding to select a pack.
 
 - Never log or place raw credential values in assertions, snapshots, findings, errors, or examples.
 - Build synthetic secret fixtures from fragments where possible so test failures do not print reusable-looking values.

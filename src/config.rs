@@ -25,6 +25,20 @@ pub struct Override {
 }
 
 impl Config {
+    /// Packs add rules to the existing configuration; strongest-match precedence
+    /// still applies. Selecting no pack preserves the old load path exactly.
+    pub fn load_with_pack(
+        explicit: Option<&Path>,
+        cwd: &Path,
+        pack: Option<crate::policy_packs::PolicyPack>,
+    ) -> Result<Self, BlastguardError> {
+        let mut config = Self::load(explicit, cwd)?;
+        if let Some(pack) = pack {
+            config.overrides.extend(pack.config()?.overrides);
+        }
+        Ok(config)
+    }
+
     pub fn load(explicit: Option<&Path>, cwd: &Path) -> Result<Self, BlastguardError> {
         let path = explicit.map(Path::to_path_buf).or_else(|| {
             let candidate = cwd.join("blastguard.toml");

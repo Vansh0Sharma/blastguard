@@ -1,5 +1,11 @@
 use crate::{error::BlastguardError, model::Analysis, redaction};
 
+/// Reuse the broker's terminal-control sanitizer before redacting diagnostic text.
+pub fn safe_text(value: &str) -> String {
+    let (sanitized, _) = crate::execution::sanitize_terminal(value.as_bytes());
+    redaction::redact(&sanitized).text
+}
+
 pub fn json(analysis: &Analysis) -> Result<String, BlastguardError> {
     let serialized = serde_json::to_string_pretty(analysis)
         .map_err(|error| BlastguardError::Serialization(error.to_string()))?;

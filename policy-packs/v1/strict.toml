@@ -1,0 +1,17 @@
+# BlastGuard strict policy pack, version 1.0.0.
+# Every command requires review; matching publication text is blocked.
+# These are whole-command text globs, not executable identity checks.
+[[overrides]]
+pattern = "*"
+decision = "ask"
+reason = "Strict pack: every command requires explicit developer review."
+
+[[overrides]]
+pattern = "*cargo publish*"
+decision = "block"
+reason = "Strict pack: Cargo publication text is prohibited."
+
+[[overrides]]
+pattern = "*npm publish*"
+decision = "block"
+reason = "Strict pack: npm publication text is prohibited."

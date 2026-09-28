@@ -581,6 +581,14 @@ pub fn reject(id: &str) -> Result<RejectResult, SandboxError> {
 }
 
 fn discover_source(repo: Option<&Path>, require_head: bool) -> Result<Repository, SandboxError> {
+    discover_source_with_mode(repo, require_head, false)
+}
+
+fn discover_source_with_mode(
+    repo: Option<&Path>,
+    require_head: bool,
+    read_only: bool,
+) -> Result<Repository, SandboxError> {
     let input = match repo {
         Some(path) => path.to_path_buf(),
         None => std::env::current_dir().map_err(|error| {
@@ -593,7 +601,11 @@ fn discover_source(repo: Option<&Path>, require_head: bool) -> Result<Repository
             "the repository path is not a directory",
         ));
     }
-    let candidate_git = Git::new(&candidate);
+    let candidate_git = if read_only {
+        Git::read_only(&candidate)
+    } else {
+        Git::new(&candidate)
+    };
     let bare = git::text(
         "checking whether the repository is bare",
         candidate_git.checked(
@@ -614,7 +626,11 @@ fn discover_source(repo: Option<&Path>, require_head: bool) -> Result<Repository
         )?,
     )?;
     let source = canonical_without_symlink(Path::new(&top), "repository root")?;
-    let source_git = Git::new(&source);
+    let source_git = if read_only {
+        Git::read_only(&source)
+    } else {
+        Git::new(&source)
+    };
     let git_dir_text = git::text(
         "resolving the Git directory",
         source_git.checked("resolving the Git directory", &["rev-parse", "--git-dir"])?,
@@ -651,7 +667,50 @@ fn discover_source(repo: Option<&Path>, require_head: bool) -> Result<Repository
 
 fn verify_create_preconditions(repository: &Repository) -> Result<(), SandboxError> {
     let git = Git::new(&repository.source);
-    if has_gitlink(&git)? || repository.source.join(".gitmodules").exists() {
+    verify_create_preconditions_with_git(repository, &git)
+}
+
+/// Read the same source preconditions as `create`, without locks or state creation.
+/// Refuse configured clean/process filters before status can run external commands.
+pub fn inspect_create_source(repo: &Path) -> Result<PathBuf, SandboxError> {
+    let git = Git::read_only(repo);
+    // Refuse partial clones before even resolving HEAD: older Git versions may
+    // not honor GIT_NO_LAZY_FETCH, and diagnostics must never fetch objects.
+    let partial = git.output(&[
+        "config",
+        "--get-regexp",
+        r"^(extensions\.partialclone|remote\..*\.promisor)$",
+    ])?;
+    if partial.status.success() {
+        return Err(SandboxError::repository("doctor cannot safely inspect a partial/promisor clone without potentially fetching objects"));
+    }
+    if partial.status.code() != Some(1) {
+        return Err(SandboxError::repository(
+            "doctor could not inspect partial-clone configuration",
+        ));
+    }
+    let filters = git.output(&["config", "--get-regexp", r"^filter\..*\.(clean|process)$"])?;
+    if filters.status.success() {
+        return Err(SandboxError::repository(
+            "doctor cannot safely inspect cleanliness with configured Git clean/process filters; no filter was executed",
+        ));
+    }
+    if filters.status.code() != Some(1) {
+        return Err(SandboxError::repository(
+            "doctor could not inspect Git filter configuration",
+        ));
+    }
+    let repository = discover_source_with_mode(Some(repo), true, true)?;
+    let git = Git::read_only(&repository.source);
+    verify_create_preconditions_with_git(&repository, &git)?;
+    Ok(repository.source)
+}
+
+fn verify_create_preconditions_with_git(
+    repository: &Repository,
+    git: &Git,
+) -> Result<(), SandboxError> {
+    if has_gitlink(git)? || repository.source.join(".gitmodules").exists() {
         return Err(SandboxError::repository("submodules are not supported"));
     }
     if contains_nested_repository(&repository.source)? {
@@ -659,12 +718,12 @@ fn verify_create_preconditions(repository: &Repository) -> Result<(), SandboxErr
             "a nested Git repository was found; nested repositories are not supported",
         ));
     }
-    if git_config_true(&git, "core.sparseCheckout")? || git_config_true(&git, "index.sparse")? {
+    if git_config_true(git, "core.sparseCheckout")? || git_config_true(git, "index.sparse")? {
         return Err(SandboxError::repository(
             "sparse checkouts are not supported",
         ));
     }
-    if !source_is_clean(&git)? {
+    if !source_is_clean(git)? {
         return Err(SandboxError::repository(
             "the source must have no staged, unstaged, untracked, or ignored files",
         ));

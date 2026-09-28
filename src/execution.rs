@@ -131,6 +131,13 @@ impl PreparedExecution {
 }
 
 pub fn prepare(request: PrepareRequest<'_>) -> Result<PreparedExecution, BlastguardError> {
+    prepare_with_pack(request, None)
+}
+
+pub fn prepare_with_pack(
+    request: PrepareRequest<'_>,
+    pack: Option<crate::policy_packs::PolicyPack>,
+) -> Result<PreparedExecution, BlastguardError> {
     validate_limits(request.timeout_seconds, request.max_output_bytes)?;
     if request.command.trim().is_empty() {
         return Err(ExecutionError::invalid("the command must not be empty").into());
@@ -143,7 +150,7 @@ pub fn prepare(request: PrepareRequest<'_>) -> Result<PreparedExecution, Blastgu
     }
 
     let lease = sandbox::lock_for_execution(request.session_id)?;
-    let config = Config::load(request.config_path, lease.source())?;
+    let config = Config::load_with_pack(request.config_path, lease.source(), pack)?;
     let analysis = analyze_for_execution(request.command, lease.worktree(), &config)?;
     let safe_command = redaction::redact(request.command).text;
     let worktree_path = redaction::redact(&lease.worktree().display().to_string()).text;
@@ -404,7 +411,7 @@ fn finish_stream(raw: RawCapture, forced_truncation: bool) -> StreamResult {
     }
 }
 
-fn sanitize_terminal(bytes: &[u8]) -> (String, usize) {
+pub(crate) fn sanitize_terminal(bytes: &[u8]) -> (String, usize) {
     let mut safe = Vec::with_capacity(bytes.len());
     let mut removed = 0;
     let mut index = 0;
