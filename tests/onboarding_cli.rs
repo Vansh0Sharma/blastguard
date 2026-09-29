@@ -813,3 +813,322 @@ fn selected_pack_gates_broker_execution_without_changing_session_hook_binding() 
         Some(0)
     );
 }
+
+fn codex_fixture() -> Fixture {
+    let fixture = Fixture::new();
+    fixture.script(
+        "codex",
+        &format!(
+            "printf executed > {}\nexit 99",
+            shell_words::quote(fixture.root.join("codex-was-executed").to_str().unwrap())
+        ),
+    );
+    fixture
+}
+
+#[test]
+fn codex_doctor_schema_is_unverified_and_entire_fixture_is_unchanged() {
+    let fixture = codex_fixture();
+    let user_config = fixture.root.join("user-config");
+    fs::create_dir_all(user_config.join("codex/plugins")).unwrap();
+    fs::write(
+        user_config.join("codex/config.toml"),
+        "# untouched fixture\n",
+    )
+    .unwrap();
+    let global = fixture.root.join("global.gitconfig");
+    fs::write(
+        &global,
+        format!(
+            "[trace2]\neventTarget = {}\nnormalTarget = {}\nperfTarget = {}\n",
+            fixture.root.join("trace-event").display(),
+            fixture.root.join("trace-normal").display(),
+            fixture.root.join("trace-perf").display()
+        ),
+    )
+    .unwrap();
+    let before = snapshot(&fixture.root);
+    let status_before = fixture.read_only_status();
+    let output = fixture
+        .command()
+        .args(["codex", "doctor", "--repo", ".", "--json"])
+        .env("GIT_CONFIG_GLOBAL", &global)
+        .env("GIT_TRACE", fixture.root.join("trace.log"))
+        .env("GIT_TRACE2_EVENT", fixture.root.join("trace2.log"))
+        .env("XDG_CONFIG_HOME", &user_config)
+        .env(
+            "BLASTGUARD_CODEX_STATE_DIR",
+            fixture.root.join("must-not-create-state"),
+        )
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let value = json(&output);
+    assert_eq!(value["schema_version"], "blastguard.codex.doctor/1.0");
+    assert_eq!(value["compatibility"], "unverified");
+    assert_eq!(value["prerequisites_passed"], true);
+    assert_eq!(value["codex"]["found"], true);
+    assert!(value["codex"]["version"].is_null());
+    assert!(value["codex"]["path"]
+        .as_str()
+        .unwrap()
+        .ends_with("/bin/codex"));
+    assert_eq!(
+        value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "checks",
+            "codex",
+            "compatibility",
+            "limitations",
+            "prerequisites_passed",
+            "repository",
+            "schema_version"
+        ]
+    );
+    assert_eq!(
+        value["codex"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["discovery", "found", "path", "version"]
+    );
+    assert_eq!(
+        value["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|check| check["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "platform",
+            "path",
+            "codex",
+            "bash",
+            "blastguard",
+            "git",
+            "repository",
+            "source_preconditions",
+            "source_policy"
+        ]
+    );
+    let human = fixture.run(&["codex", "doctor"]);
+    assert_eq!(human.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&human.stdout).contains("Compatibility: unverified"));
+    assert!(
+        status_before == fixture.read_only_status(),
+        "Codex doctor changed Git status"
+    );
+    assert_snapshot_unchanged(
+        &before,
+        &snapshot(&fixture.root),
+        "Codex doctor mutated fixture or executed Codex",
+    );
+}
+
+#[test]
+fn codex_and_claude_doctors_preserve_existing_sessions_and_worktrees() {
+    let fixture = codex_fixture();
+    assert!(fixture
+        .run(&["sandbox", "create", "--id", "doctor-snapshot"])
+        .status
+        .success());
+    let state = fixture.repo.join(".git/blastguard");
+    assert!(state.join("sessions/doctor-snapshot.json").is_file());
+    let status_before = fixture.read_only_status();
+    let before = snapshot(&fixture.root);
+    for client in ["codex", "claude"] {
+        let output = fixture
+            .command()
+            .args([client, "doctor", "--json"])
+            .env("BLASTGUARD_CODEX_SESSION_ID", "doctor-snapshot")
+            .env("BLASTGUARD_CODEX_STATE_DIR", &state)
+            .env("BLASTGUARD_CODEX_LAUNCH_ID", "fabricated-launch")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0));
+        let report = json(&output);
+        if client == "claude" {
+            assert_eq!(report["schema_version"], "blastguard.claude.doctor/1.0");
+            assert_eq!(report["ready"], true);
+            assert_eq!(report["next_commands"].as_array().unwrap().len(), 5);
+            assert!(report.get("compatibility").is_none());
+        } else {
+            assert_eq!(report["compatibility"], "unverified");
+        }
+        assert!(
+            status_before == fixture.read_only_status(),
+            "doctor changed Git status"
+        );
+        assert_snapshot_unchanged(
+            &before,
+            &snapshot(&fixture.root),
+            "doctor modified existing source, Git, state or worktree paths",
+        );
+    }
+}
+
+#[test]
+fn codex_doctor_discovery_never_executes_symlinks_or_metacharacter_paths() {
+    for kind in ["symlink", "metacharacter-path", "directory"] {
+        let mut fixture = codex_fixture();
+        match kind {
+            "symlink" => {
+                let target = fixture.root.join("codex target");
+                fs::rename(fixture.bin.join("codex"), &target).unwrap();
+                symlink(target, fixture.bin.join("codex")).unwrap();
+            }
+            "metacharacter-path" => {
+                let target = fixture.root.join("bin $(touch discovery-ran); quote '");
+                fs::rename(&fixture.bin, &target).unwrap();
+                fixture.bin = target;
+            }
+            "directory" => {
+                fs::rename(fixture.bin.join("codex"), fixture.root.join("not-on-path")).unwrap();
+                fs::create_dir(fixture.bin.join("codex")).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = snapshot(&fixture.root);
+        let output = fixture.run(&["codex", "doctor", "--json"]);
+        assert_eq!(
+            output.status.code(),
+            Some(if kind == "directory" { 30 } else { 0 })
+        );
+        assert_eq!(json(&output)["codex"]["found"], kind != "directory");
+        assert_snapshot_unchanged(
+            &before,
+            &snapshot(&fixture.root),
+            "discovery executed Codex or interpreted a path",
+        );
+    }
+}
+
+#[test]
+fn codex_doctor_refuses_missing_prerequisites_and_unsafe_git_reads_without_writing() {
+    for kind in [
+        "untracked",
+        "ignored",
+        "staged",
+        "unstaged",
+        "partial",
+        "filter",
+        "missing-codex",
+        "missing-git",
+        "relative-path",
+        "symlink",
+        "nonrepo",
+        "invalid-policy",
+    ] {
+        let fixture = codex_fixture();
+        let mut command = fixture.command();
+        command.args(["codex", "doctor", "--json"]);
+        match kind {
+            "untracked" => fs::write(fixture.repo.join("new.txt"), "new").unwrap(),
+            "ignored" => fs::write(fixture.repo.join("ignored.txt"), "ignored").unwrap(),
+            "staged" | "unstaged" => {
+                fs::write(fixture.repo.join("tracked.txt"), "changed").unwrap();
+                if kind == "staged" {
+                    fixture.git(&["add", "tracked.txt"]);
+                }
+            }
+            "partial" => fixture.git(&["config", "remote.origin.promisor", "true"]),
+            "filter" => {
+                fs::write(
+                    fixture.repo.join(".gitattributes"),
+                    "tracked.txt filter=probe\n",
+                )
+                .unwrap();
+                fixture.commit();
+                let probe = format!(
+                    "touch {}; cat",
+                    shell_words::quote(fixture.root.join("filter-ran").to_str().unwrap())
+                );
+                fixture.git(&["config", "filter.probe.clean", &probe]);
+                fixture.git(&["config", "core.fsmonitor", &probe]);
+            }
+            "missing-codex" => {
+                fs::set_permissions(fixture.bin.join("codex"), fs::Permissions::from_mode(0o600))
+                    .unwrap()
+            }
+            "missing-git" => {
+                command.env("PATH", &fixture.bin);
+            }
+            "relative-path" => {
+                command.env("PATH", ".:/usr/bin:/bin");
+            }
+            "symlink" => {
+                let alias = fixture.root.join("alias");
+                symlink(&fixture.repo, &alias).unwrap();
+                command.arg("--repo").arg(alias);
+            }
+            "nonrepo" => {
+                command.arg("--repo").arg(&fixture.bin);
+            }
+            "invalid-policy" => {
+                fs::write(
+                    fixture.repo.join("blastguard.toml"),
+                    "unexpected = 'value'\n",
+                )
+                .unwrap();
+                fixture.commit();
+            }
+            _ => unreachable!(),
+        }
+        let before = snapshot(&fixture.root);
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(30), "prerequisite: {kind}");
+        assert_eq!(json(&output)["compatibility"], "unverified");
+        assert_eq!(json(&output)["prerequisites_passed"], false);
+        assert_snapshot_unchanged(
+            &before,
+            &snapshot(&fixture.root),
+            &format!("Codex doctor mutated fixture: {kind}"),
+        );
+    }
+}
+
+#[test]
+fn codex_doctor_redacts_discovery_paths_git_errors_and_invalid_cli_input() {
+    let mut fixture = codex_fixture();
+    let token = ["ghp_", "abcdefghijklmnopqrstuvwxyz123456"].concat();
+    let path = fixture.root.join(format!("{token}-\u{1b}[31mrepo"));
+    fs::rename(&fixture.repo, &path).unwrap();
+    fixture.repo = path;
+    let bin = fixture.root.join(format!("{token}-\u{1b}[31mbin"));
+    fs::rename(&fixture.bin, &bin).unwrap();
+    fixture.bin = bin;
+    for args in [
+        vec!["codex", "doctor"],
+        vec!["codex", "doctor", "--json"],
+        vec!["codex", "doctor", "--repo", "missing", "--json"],
+        vec!["codex", "doctor", "--repo"],
+    ] {
+        let before = snapshot(&fixture.root);
+        let output = fixture.run(&args);
+        assert_safe(&output, &token);
+        assert_eq!(
+            output.status.code(),
+            Some(if args.contains(&"--repo") { 64 } else { 0 })
+        );
+        if output.status.success() && args.contains(&"--json") {
+            assert_eq!(json(&output)["compatibility"], "unverified");
+        }
+        assert_snapshot_unchanged(
+            &before,
+            &snapshot(&fixture.root),
+            "redaction changed fixture",
+        );
+    }
+    fixture.script("git", &format!("printf '%s\\n' '{token}' >&2\nexit 1"));
+    let output = fixture.run(&["codex", "doctor", "--json"]);
+    assert_eq!(output.status.code(), Some(30));
+    assert_safe(&output, &token);
+    assert!(!passed(&json(&output), "git"));
+}

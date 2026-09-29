@@ -3,6 +3,8 @@
 pub mod claude;
 pub mod claude_doctor;
 pub mod claude_hook;
+pub mod codex_doctor;
+pub mod codex_hook;
 pub mod config;
 pub mod error;
 pub mod execution;

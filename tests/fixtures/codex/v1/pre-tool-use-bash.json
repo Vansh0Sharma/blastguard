@@ -1,0 +1,12 @@
+{
+  "session_id": "codex-fixture-session",
+  "transcript_path": null,
+  "cwd": "/untrusted-fixture-cwd",
+  "hook_event_name": "PreToolUse",
+  "model": "fixture-model",
+  "turn_id": "fixture-turn",
+  "tool_name": "Bash",
+  "tool_use_id": "fixture-call",
+  "permission_mode": "default",
+  "tool_input": { "command": "cargo test" }
+}

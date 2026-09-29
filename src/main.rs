@@ -7,8 +7,9 @@ use std::{
 
 use blastguard::policy_packs::{self, PolicyPack};
 use blastguard::{
-    analyze, claude, claude_doctor, claude_hook, config::Config, error::BlastguardError, execution,
-    execution_error, execution_render, model::Decision, redaction, render, sandbox, sandbox_render,
+    analyze, claude, claude_doctor, claude_hook, codex_doctor, codex_hook, config::Config,
+    error::BlastguardError, execution, execution_error, execution_render, model::Decision,
+    redaction, render, sandbox, sandbox_render,
 };
 use clap::{error::ErrorKind, Parser, Subcommand};
 
@@ -31,6 +32,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Experimental offline Codex checks; not a native integration or launcher.
+    Codex {
+        #[command(subcommand)]
+        command: CodexCommand,
+    },
     /// Internal composite-action adapter; not an execution entry point.
     #[command(hide = true)]
     GithubAction,
@@ -66,6 +72,20 @@ enum Command {
         #[command(subcommand)]
         command: SandboxCommand,
     },
+}
+
+#[derive(Subcommand)]
+enum CodexCommand {
+    /// Read-only prerequisites; never executes Codex or verifies compatibility.
+    Doctor {
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Internal protocol foundation; no trusted Codex launcher exists.
+    #[command(hide = true)]
+    Hook,
 }
 
 #[derive(Subcommand)]
@@ -211,6 +231,52 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<u8, (BlastguardError, bool)> {
     match cli.command {
+        Command::Codex {
+            command: CodexCommand::Doctor { repo, json },
+        } => {
+            let report = codex_doctor::inspect(repo.as_deref()).map_err(|error| (error, false))?;
+            let output = if json {
+                codex_doctor::json(&report).map_err(|error| (error, false))?
+            } else {
+                codex_doctor::human(&report)
+            };
+            println!("{output}");
+            Ok(if report.prerequisites_passed {
+                EXIT_ALLOW
+            } else {
+                codex_doctor::PREREQUISITE_EXIT
+            })
+        }
+        Command::Codex {
+            command: CodexCommand::Hook,
+        } => {
+            let result =
+                codex_hook::process_with_deadline(io::stdin()).and_then(|response| response.json());
+            match result {
+                Ok(output) => {
+                    if writeln!(io::stdout(), "{output}")
+                        .and_then(|_| io::stdout().flush())
+                        .is_ok()
+                    {
+                        Ok(EXIT_ALLOW)
+                    } else {
+                        let _ = writeln!(
+                            io::stderr(),
+                            "BlastGuard: could not write Codex hook response"
+                        );
+                        Ok(2)
+                    }
+                }
+                Err(error) => {
+                    let _ = writeln!(
+                        io::stderr(),
+                        "BlastGuard: {}",
+                        render::safe_text(&error.to_string())
+                    );
+                    Ok(2)
+                }
+            }
+        }
         Command::GithubAction => Ok(blastguard::github_action::run()),
         Command::Analyze {
             command,

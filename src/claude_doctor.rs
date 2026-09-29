@@ -38,6 +38,16 @@ pub struct Report {
 }
 
 pub fn inspect(repo: Option<&Path>) -> Result<Report, BlastguardError> {
+    inspect_for(repo, "claude")
+}
+
+// Share the already-hardened, non-executing discovery and repository checks.
+// The Codex doctor converts this internal result to its own schema; it never
+// renders the Claude-specific version note, readiness claim, or next commands.
+pub(crate) fn inspect_for(
+    repo: Option<&Path>,
+    client: &'static str,
+) -> Result<Report, BlastguardError> {
     let input = match repo {
         Some(path) => path.to_path_buf(),
         None => env::current_dir()
@@ -56,15 +66,21 @@ pub fn inspect(repo: Option<&Path>) -> Result<Report, BlastguardError> {
     let stable_path = env::var_os("PATH")
         .is_some_and(|path| env::split_paths(&path).all(|entry| entry.is_absolute()));
     check(&mut checks, "path", stable_path, "Use only absolute PATH entries so changing to the worktree cannot change executable discovery.");
-    let claude_path = find_executable("claude");
+    let claude_path = find_executable(client);
     check(
         &mut checks,
-        "claude",
+        client,
         claude_path.is_some(),
-        if claude_path.is_some() {
-            "Claude executable found; it was not launched."
+        &if claude_path.is_some() {
+            if client == "claude" {
+                "Claude executable found; it was not launched.".to_owned()
+            } else {
+                format!("{client} executable found; it was not launched.")
+            }
+        } else if client == "claude" {
+            "Claude was not found as an executable on PATH; install/configure Claude Code before launch.".to_owned()
         } else {
-            "Claude was not found as an executable on PATH; install/configure Claude Code before launch."
+            format!("{client} was not found as an executable on PATH.")
         },
     );
 
@@ -126,7 +142,7 @@ pub fn inspect(repo: Option<&Path>) -> Result<Report, BlastguardError> {
 
     let ready = checks.iter().all(|check| check.passed);
     let mut next_commands = Vec::new();
-    if ready {
+    if ready && client == "claude" {
         if let Ok(source) = &source {
             if let Some(raw) = source.to_str() {
                 // Never turn a redacted or control-bearing path into executable advice.

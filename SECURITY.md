@@ -26,6 +26,13 @@ Do not include live credentials, private keys, customer data, or weaponized payl
 
 ## Security scope and non-goals
 
+The [Codex compatibility foundation](docs/integrations/codex.md) is experimental
+and offline only. Its doctor does not execute Codex. The internal CLI hook denies
+even a complete environment context because no trusted Codex launch binding
+exists in 6A; offline evaluator fixtures are not runtime enforcement evidence.
+There is no Codex launcher, installed plugin, settings write, native output
+capture/redaction, or additional containment guarantee.
+
 BlastGuard combines a command-policy guardrail with a reviewable Git-worktree lifecycle. It can launch Claude Code with its initial cwd set to a validated active worktree and gate native Claude Bash calls through a session-bound `PreToolUse` hook. It can classify only the shell input it receives and redact only recognized secret shapes.
 
 Direct `sandbox exec` clears the caller environment, supplies a small fixed operational environment without `HOME` or credential variables, disables Bash startup files, bounds time and captured output, and uses a fresh Unix process group for best-effort descendant cleanup. Captured streams are terminal-control sanitized and pattern-redacted before rendering. Journal schema v2 contains no command text, output text, or fingerprint; an existing v1 fingerprint is stripped on the next append. These are exposure-reduction and reliability measures, not confinement.

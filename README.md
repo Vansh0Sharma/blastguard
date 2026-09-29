@@ -81,6 +81,12 @@ blastguard policy list
 
 Native Claude Bash is policy-gated, not brokered. BlastGuard does not capture, bound, sanitize, journal, or redact Bash output when Claude executes Bash natively. Doctor does not prove hook enforcement; verify a harmless denial in the installed client. See the guide for the upstream hook timeout/start-failure boundary and setup using the official [hooks](https://code.claude.com/docs/en/hooks), [CLI](https://code.claude.com/docs/en/cli-reference), and [settings](https://code.claude.com/docs/en/settings) documentation.
 
+## Codex (experimental)
+
+See the [experimental offline compatibility foundation](docs/integrations/codex.md)
+for read-only diagnostics and protocol tests. This is not a native integration,
+launcher, installed hook, or native-output redaction.
+
 ## GitHub Actions
 
 Use the [first-party static policy action](docs/integrations/github-actions.md)
