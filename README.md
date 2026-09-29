@@ -14,9 +14,11 @@ It exists because a clean Git diff and a shell safety check solve different prob
 
 ## Safe quickstart
 
-Prerequisites: stable Rust, Git, and a clean Git repository with at least one commit.
+Prerequisites: stable Rust, a C compiler, Git, and a clean Git repository with at least one commit.
 
-Install from this checkout; BlastGuard has not been published to crates.io:
+Install the `0.1.1` release candidate from this checkout. It is not yet tagged or
+released; no crates.io, Homebrew, Marketplace, or downloadable-binary installation
+is provided:
 
 ```sh
 cargo install --path . --locked

@@ -27,8 +27,12 @@ be trusted. The analyzed checkout's `.cargo/config` is not used for this build.
 
 Pin BlastGuard to a reviewed **full commit SHA**, or a release tag once one
 actually exists, never an unpinned branch. Full SHAs are preferable because tags
-can move. Replace `YOUR_REVIEWED_BLASTGUARD_COMMIT_SHA` below with an actual
-revision containing this action; it is not a published tag or usable SHA.
+can move. The examples pin the merged, hosted-tested 5B implementation at
+`cb28ed1af6337e7b463cb18ce977896b2b4eba0e`, before the `0.1.1` metadata update.
+`v0.1.1` is the upcoming stable release tag, **not an available tag yet**. Use
+`Vansh0Sharma/blastguard@v0.1.1` only after the owner publishes that release;
+prefer its reviewed full commit SHA for an immutable release pin. Update both
+the dependency-preparation checkout and action reference together.
 
 ## Minimal workflow
 
@@ -55,7 +59,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Vansh0Sharma/blastguard
-          ref: YOUR_REVIEWED_BLASTGUARD_COMMIT_SHA
+          ref: cb28ed1af6337e7b463cb18ce977896b2b4eba0e
           path: .github/actions/blastguard
           persist-credentials: false
       - name: Install the compiler and stable Rust toolchain
@@ -82,7 +86,7 @@ On runners already provisioned with the matching dependencies, the normal remote
 form is also supported, without the second checkout or fetch step:
 
 ```yaml
-- uses: Vansh0Sharma/blastguard@YOUR_REVIEWED_BLASTGUARD_COMMIT_SHA
+- uses: Vansh0Sharma/blastguard@cb28ed1af6337e7b463cb18ce977896b2b4eba0e
   with:
     command: 'cargo test'
 ```
