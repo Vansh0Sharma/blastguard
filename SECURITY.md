@@ -2,14 +2,19 @@
 
 ## Supported versions
 
-BlastGuard has not yet published a release. Security fixes are currently made on the default development branch.
+`v0.1.1` is a published source release. The default branch prepares unreleased
+`0.1.2`; no crates.io package, release binaries, or GitHub Marketplace publication
+exist yet. Security fixes are developed on the default branch for the `0.1.x` line.
 
 | Version | Security fixes |
 | --- | --- |
-| Default branch / future `0.1.x` line | Supported |
+| `0.1.x` source releases (currently `0.1.1`) | Supported; fixes land in subsequent `0.1.x` releases |
+| Default branch (`0.1.2` development) | Development fixes; not a released artifact |
 | Earlier snapshots | Not supported |
 
-No public release or backward-compatibility guarantee is implied by this table. After releases exist, this table will name the maintained release lines explicitly.
+The CLI is the supported user-facing interface; the internal Rust library API has
+no stability commitment. Distribution does not expand the security guarantees.
+See [distribution verification and owner gates](docs/distribution.md).
 
 ## Reporting a vulnerability
 

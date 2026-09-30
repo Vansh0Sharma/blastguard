@@ -8,8 +8,9 @@ developer review; nothing is automatically accepted or rejected.
 
 Use macOS or Linux, a trusted local Git installation, an installed Claude Code
 CLI on an absolute PATH, and a disposable or backed-up repository with a commit.
-Install BlastGuard from its checkout with `cargo install --path . --locked` if
-needed. There is no published-package installation assumed here.
+Install the published `v0.1.1` source using the [pinned source command](../../README.md#safe-quickstart),
+or evaluate a reviewed `0.1.2` checkout with `cargo install --path . --locked`.
+There is no crates.io package or downloadable release binary yet.
 
 From that repository:
 

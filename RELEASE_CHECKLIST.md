@@ -1,39 +1,47 @@
-# Release checklist: v0.1.1
+# Release checklist: v0.1.2 preparation
 
-This is release preparation, not a published release. Do not tag, push, publish,
-upload assets, or change repository settings as part of local preparation.
-The owner performs those actions separately after review and validation.
+`v0.1.1` is an existing [published source release](https://github.com/Vansh0Sharma/blastguard/releases/tag/v0.1.1)
+at `ade42ddb72fcc7ed270d075514ec274746ea1a17`. Do not move or republish that tag.
+`0.1.2` is unreleased. There is no crates.io package, release binary, Homebrew
+formula, or GitHub Marketplace publication yet.
 
-## Baseline and local preparation
+This checklist does not authorize commits, pushes, tags, registry publication,
+GitHub Releases, binary uploads, signing credentials, or repository-setting changes.
 
-- [x] The public repository and initial commit exist; Milestones 5A and 5B are merged into `main` at `cb28ed1af6337e7b463cb18ce977896b2b4eba0e`.
-- [x] That merged baseline passed [Rust CI](https://github.com/Vansh0Sharma/blastguard/actions/runs/36446270914) and [all seven hosted Action cases](https://github.com/Vansh0Sharma/blastguard/actions/runs/36446270753). This is not evidence for a later release commit.
-- [x] Prepare `0.1.1` package/lockfile metadata, a dated changelog, and pinned Action examples. Keep `license = "Apache-2.0"` without a redundant `license-file`; retain the complete `LICENSE` and Vansh Sharma's 2026 `NOTICE`.
-- [x] Run `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-targets --all-features`, `cargo build --release --locked`, and `git diff --check` on the release candidate.
-- [x] Smoke-test version, policy packs, allow/block analysis, read-only doctor, and the Action's prerequisite/offline-build path in disposable fixtures.
-- [x] Install into a temporary Cargo root and check the installed binary's version/help; run `docs/demo.sh` in its disposable repository.
+## Local preparation evidence
 
-Local preparation checks passed on 2026-09-28 with macOS arm64 and stable Rust
-1.98.1: 92 tests passed, none failed or ignored. The Action smoke used a fresh
-Cargo cache populated by `cargo fetch --locked`, followed by its offline build;
-the supplied command did not execute. Doctor discovered Claude without launching
-it, and repository/Git file bytes and status were unchanged. These local results
-do not replace hosted CI or a real interactive Claude test of the release commit.
+- [ ] Review `0.1.2` package/lockfile metadata, draft changelog, and source-release wording.
+- [ ] Confirm Apache-2.0 metadata, complete LICENSE/NOTICE, and dependency attribution review.
+- [ ] Run `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-targets --all-features`, `cargo build --release --locked`, and `git diff --check`.
+- [ ] Run Python distribution tests and inspect the exact allowlisted package inventory.
+- [ ] In a disposable clean source copy, run `cargo package --list --locked`, `cargo package --locked`, and `cargo publish --dry-run --locked --registry crates-io`; stop if credentials are requested.
+- [ ] Inspect/extract the crate, compare source bytes, test/build it, install into a temporary root, and smoke version/packs/static allow/block without executing supplied commands.
+- [ ] Record local repeat-build and candidate archive/checksum/extracted-binary results, including their limited scope.
 
-## Owner review after the preparation commit
+Use [the distribution procedure](docs/distribution.md). Local results apply only
+to the inspected tree/toolchain/platform; repeat on the final release commit.
+Historical `v0.1.1` validation is not evidence for this candidate.
 
-- [ ] Review the release diff, license/attribution, source-only installation, security boundaries, command examples, and dated changelog. Confirm the actual release date before tagging; remove the preparation-status wording only when publishing.
-- [ ] Merge the reviewed preparation commit and require both `CI` and `Action end-to-end` to pass on the exact release commit. Repeat the local validation and disposable smoke checks from a clean checkout of that commit.
-- [ ] Run `cargo audit` and review every advisory or warning; an automated test pass is not a dependency-security review.
-- [ ] Perform a real interactive Claude Code test: inspect `/hooks`, verify the managed worktree and session binding, and confirm `allow`, `ask`, and a harmless `deny`. Review the diff and reject the test session.
-- [ ] Enable or confirm GitHub private vulnerability reporting and a working private disclosure channel. Do not infer this setting from the existence of `SECURITY.md`.
-- [ ] Record the README demo with `vhs docs/demo.tape`, review it, and decide whether to include the recording. If intentionally omitted, record that decision; do not claim a GIF was generated.
+## Owner gates after review
 
-## Owner-only release actions
+- [ ] Commit/merge through normal review; require existing CI and Action end-to-end checks to pass on the exact candidate.
+- [ ] Run the manual Release verification workflow on that same commit: native Ubuntu 22.04 x86_64, macOS 15 arm64, and macOS 15 Intel must pass. Record run URLs and resolved SHA.
+- [ ] Explicitly review repeat-build diagnostic summaries before public binary distribution, including any non-blocking UUID/signature-only warning. A green job is not approval or a reproducibility pass; all other differences block. BlastGuard makes no reproducible-build claim.
+- [ ] Run `cargo audit` and review all advisories/warnings; review dependency licenses.
+- [ ] Establish Linux dependency/glibc floors and test the actual artifact on baseline/newer distributions.
+- [ ] Resolve macOS signing/notarization and Gatekeeper behavior, or defer macOS binary distribution. No Windows artifacts.
+- [ ] Perform a real owner-controlled Claude validation: worktree/session binding, actual allow/ask/harmless deny, diff review, reject, unchanged source. Do not infer Codex runtime support from offline tests.
+- [ ] Confirm private vulnerability reporting and a working private contact. Do not infer settings from SECURITY.md.
+- [ ] Review/record the demo if desired; do not claim a recording exists without generating and inspecting it.
 
-- [ ] Create an annotated or signed `v0.1.1` tag on the reviewed, green release commit, then explicitly push that tag. Never move an existing release tag.
-- [ ] Draft GitHub release notes from the `0.1.1` changelog, preserving the Action's Rust/compiler/Cargo-cache prerequisites and static-only limitations.
-- [ ] Confirm the tagged commit's CI results, then publish the GitHub Release. Make `v0.1.1` usage public only after it exists; prefer full-SHA Action pins.
-- [ ] Update the security support table and release-status wording to reflect the actual published state. Do not imply crates.io, Homebrew, Marketplace, or downloadable binaries are available.
+## Separately authorized publication, not part of preparation
 
-This checklist does not authorize package publication or binary uploads.
+- [ ] Recheck crates.io name ownership/availability; approve the exact reviewed archive. A dry run does not reserve a name or guarantee acceptance.
+- [ ] Decide release channels independently: source tag, crate, and binaries have separate gates. Prefer version-pinned Cargo installation once it exists.
+- [ ] Confirm final version/changelog date and green checks; create an owner-authorized annotated/signed `v0.1.2` tag on the reviewed commit. Never move a published tag.
+- [ ] Review the GitHub Release draft and installation claims before publishing.
+- [ ] Before any binary upload, review archive contents, SHA-256 checksums, provenance verification, and platform/signing disclosures. Keep build and publishing permissions separate.
+- [ ] Update availability/support documentation only after each publication succeeds.
+
+Until separately approved, stop after validation. No token, account, release,
+Marketplace, Homebrew, installer, or public artifact is needed for preparation.

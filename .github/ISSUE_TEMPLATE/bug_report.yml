@@ -11,7 +11,7 @@ body:
     attributes:
       label: BlastGuard version
       description: Paste the output of `blastguard --version` or identify the commit.
-      placeholder: blastguard 0.1.1 or commit SHA
+      placeholder: blastguard version and commit SHA, if built from source
     validations:
       required: true
   - type: dropdown

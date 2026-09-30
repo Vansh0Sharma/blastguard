@@ -16,14 +16,27 @@ It exists because a clean Git diff and a shell safety check solve different prob
 
 Prerequisites: stable Rust, a C compiler, Git, and a clean Git repository with at least one commit.
 
-Install the `0.1.1` release candidate from this checkout. It is not yet tagged or
-released; no crates.io, Homebrew, Marketplace, or downloadable-binary installation
-is provided:
+[`v0.1.1`](https://github.com/Vansh0Sharma/blastguard/releases/tag/v0.1.1) is a
+published **source release**. This checkout prepares **`0.1.2` (unreleased)**.
+There is no crates.io package, release binary, Homebrew formula, or GitHub
+Marketplace publication yet. Install the published source without manually cloning:
+
+```sh
+cargo install --git https://github.com/Vansh0Sharma/blastguard \
+  --rev ade42ddb72fcc7ed270d075514ec274746ea1a17 --locked --bin blastguard blastguard
+```
+
+To evaluate the unreleased candidate from a reviewed checkout instead:
 
 ```sh
 cargo install --path . --locked
 blastguard --version
 ```
+
+The CLI is the supported user-facing interface. The Rust library is an internal
+implementation surface, not a stable, supported library API. See
+[distribution preparation](docs/distribution.md) for package checks, proposed
+binary targets, and unresolved release gates.
 
 From a disposable or backed-up clean repository:
 
@@ -190,6 +203,8 @@ See [the architecture](docs/architecture.md) for component and data-flow details
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
 - [Release checklist](RELEASE_CHECKLIST.md)
+- [Distribution preparation](docs/distribution.md)
 - [Apache License 2.0](LICENSE)
 
-BlastGuard is licensed under the Apache License, Version 2.0. No public package or GitHub release is claimed by this repository state.
+BlastGuard is licensed under the Apache License, Version 2.0. Source release
+availability does not imply registry, binary, or Marketplace publication.

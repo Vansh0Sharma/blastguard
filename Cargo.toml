@@ -1,12 +1,25 @@
 [package]
 name = "blastguard"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "A local command-policy and ephemeral Git worktree safety tool for AI coding agents"
 license = "Apache-2.0"
 readme = "README.md"
+repository = "https://github.com/Vansh0Sharma/blastguard"
 keywords = ["security", "cli", "git", "shell", "developer-tools"]
 categories = ["command-line-utilities", "development-tools"]
+# Keep scripts/package-files.txt in sync; verification rejects unexpected files.
+include = [
+    "/Cargo.toml", "/Cargo.lock", "/LICENSE", "/NOTICE", "/README.md",
+    "/CHANGELOG.md", "/CONTRIBUTING.md", "/SECURITY.md", "/RELEASE_CHECKLIST.md",
+    "/blastguard.example.toml", "/action.yml",
+    "/src/*.rs", "/tests/*.rs", "/tests/distribution_test.py",
+    "/tests/fixtures/codex/v1/*.json", "/tests/fixtures/codex/v1/README.md",
+    "/policy-packs/README.md", "/policy-packs/v1/*.toml",
+    "/scripts/github-action.sh", "/scripts/verify_distribution.py",
+    "/scripts/package-files.txt",
+    "/docs/**/*.md", "/docs/demo.sh", "/docs/demo.tape", "/docs/INSTALL.txt",
+]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

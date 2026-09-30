@@ -18,7 +18,7 @@ Run all checks before submitting a change:
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
-cargo build --release
+cargo build --release --locked
 git diff --check
 ```
 
@@ -29,6 +29,34 @@ bash docs/demo.sh
 ```
 
 The demo creates a temporary repository and does not operate on an existing user repository.
+
+## Distribution validation (no publication)
+
+The CLI is the supported interface; public Rust modules are implementation
+details, not a stable library API. Do not change runtime behavior as part of a
+packaging-only patch. Keep `Cargo.toml`'s include rules and
+`scripts/package-files.txt` synchronized, including compile-time fixtures and
+policy packs. Python 3's standard library is sufficient for distribution checks:
+
+```sh
+python3 -B -m unittest discover -s tests -p distribution_test.py
+```
+
+Follow [the disposable package procedure](docs/distribution.md#source-package-validation)
+to package, dry-run, test the extracted crate, and install into a temporary root.
+Never bypass Cargo checks with `--allow-dirty` or `--no-verify`. No credentials
+are needed for the intended preparation path; if a registry requests them,
+stop and record an owner gate rather than logging in.
+
+The separate manual `Release verification` workflow tests the selected commit
+on native Linux x86_64, macOS arm64, and macOS Intel. It compares two clean-target
+builds and verifies disposable candidate archives. It does not publish, upload
+assets/attestations, or establish general reproducibility. Ordinary CI and the
+static Action's offline prerequisites are unchanged. Mach-O UUID and their verified
+signature-page hash differences produce a visible, non-blocking **unresolved**
+diagnostic requiring owner review before public binaries. Other differences or
+unknown/invalid metadata remain blocking; Linux still requires exact bytes.
+Never remove UUIDs/signatures or normalize artifacts to manufacture equality.
 
 ## Dependency review
 

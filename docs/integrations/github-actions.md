@@ -2,8 +2,8 @@
 
 The first-party composite action analyzes one supplied Bash command string with
 `blastguard analyze`. It **never executes that command**, intercepts another
-step, creates a sandbox, invokes Git, or launches Claude. No Marketplace listing
-or published release is implied.
+step, creates a sandbox, invokes Git, or launches Claude. `v0.1.1` is a published
+source release, not a Marketplace listing or downloadable binary distribution.
 
 ## Prerequisites and pinning
 
@@ -25,13 +25,13 @@ Provision them separately; a fresh hosted runner will normally need a dependency
 fetch first. Build tools, cached dependencies and global Cargo configuration must
 be trusted. The analyzed checkout's `.cargo/config` is not used for this build.
 
-Pin BlastGuard to a reviewed **full commit SHA**, or a release tag once one
-actually exists, never an unpinned branch. Full SHAs are preferable because tags
+Pin BlastGuard to a reviewed **full commit SHA** or a published release tag,
+never an unpinned branch. Full SHAs are preferable because tags
 can move. The examples pin the merged, hosted-tested 5B implementation at
 `cb28ed1af6337e7b463cb18ce977896b2b4eba0e`, before the `0.1.1` metadata update.
-`v0.1.1` is the upcoming stable release tag, **not an available tag yet**. Use
-`Vansh0Sharma/blastguard@v0.1.1` only after the owner publishes that release;
-prefer its reviewed full commit SHA for an immutable release pin. Update both
+`v0.1.1` is available as a source release at commit
+`ade42ddb72fcc7ed270d075514ec274746ea1a17`; prefer that full SHA when selecting
+the release. `0.1.2` is unreleased and is not an available installation pin. Update both
 the dependency-preparation checkout and action reference together.
 
 ## Minimal workflow

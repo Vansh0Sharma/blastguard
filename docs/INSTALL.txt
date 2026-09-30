@@ -1,0 +1,25 @@
+BlastGuard candidate archive -- verification only, not a published release
+
+Contents: blastguard, LICENSE, NOTICE, INSTALL.txt.
+This candidate is not Developer ID signed/notarized and has no published provenance.
+Do not redistribute it as an official release or bypass operating-system protections.
+
+For future public archives: download from the official repository's release page,
+verify the matching SHA-256 file and trusted build provenance before extraction,
+then place blastguard in a user-owned PATH directory. Do not install as root.
+Run blastguard --version and blastguard policy list before evaluation.
+Git and Bash are required for the worktree/execution paths; Claude is optional.
+No configuration, hook, daemon, or shell profile is installed by this archive.
+Remove the executable to uninstall; review/reject any active sessions first.
+
+The CLI is the supported interface. The Rust library API is not stable.
+BlastGuard is a command-policy guardrail and Git review workflow, not an OS sandbox
+or network-containment system. It cannot guarantee arbitrary binary behavior.
+Native Claude Bash output is not captured or redacted by BlastGuard.
+The experimental Codex foundation is offline only; there is no native Codex
+launcher, installed hook, or demonstrated native enforcement.
+Windows controlled execution remains fail-closed; no Windows artifact is provided.
+
+Source and full documentation: https://github.com/Vansh0Sharma/blastguard
+Distribution gates: https://github.com/Vansh0Sharma/blastguard/blob/main/docs/distribution.md
+License: Apache-2.0. Copyright 2026 Vansh Sharma.

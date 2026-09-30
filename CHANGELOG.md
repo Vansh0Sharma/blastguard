@@ -5,10 +5,35 @@ All notable changes to BlastGuard will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.1] - 2026-09-28
+## [0.1.2] - Unreleased
 
-Release preparation date. These changes are implemented in the repository;
-the `v0.1.1` tag and release have not been published.
+### Added
+
+- Experimental offline Codex compatibility foundation: non-executing doctor,
+  strict internal hook adapter, versioned fixtures, and adversarial tests. There
+  is no Codex launcher, installed integration, or native enforcement claim; the
+  unbound CLI hook always denies.
+- Explicit source-package inventory and disposable extracted-package validation
+  helpers, plus a manual native Linux/macOS distribution-verification workflow.
+- Candidate archive/checksum checks, controlled repeat-build comparison, and
+  distribution planning documentation. Hosted results, public binaries, signing,
+  notarization, provenance, and general reproducibility remain separate gates.
+
+### Changed
+
+- Classify observed macOS repeat-build UUID/signature-page differences as a
+  visible, non-blocking unresolved diagnostic, with explicit owner review before
+  public binaries. Unexpected differences and invalid metadata remain blocking;
+  archives and their security metadata remain intact. No reproducibility claim.
+- Prepare package metadata for `0.1.2`, link the public repository, and clarify
+  that the CLI, not the internal Rust library API, is the supported interface.
+- Correct source-release status and document pinned source installation. No
+  crates.io, Homebrew, or Marketplace publication is part of this preparation.
+
+## [0.1.1] - 2026-09-29
+
+Published [source release](https://github.com/Vansh0Sharma/blastguard/releases/tag/v0.1.1).
+No release binaries or crates.io package were published.
 
 ### Added
 
@@ -16,7 +41,7 @@ the `v0.1.1` tag and release have not been published.
 - Opt-in, offline `balanced`, `strict`, and `ci` policy packs, with `policy list` / `policy show` discovery and additive selection for `analyze` and `sandbox exec`. Built-in hard blocks remain non-overridable.
 - A focused Claude Code onboarding guide covering session-bound hooks, harmless denial checks, review, cleanup, and the distinction between native Claude Bash and brokered execution.
 - A first-party composite GitHub Action for static analysis of supplied Bash text, with decision/status outputs, explicit failure thresholds, and optional redacted JSON reports. The supplied command is never executed or intercepted.
-- GitHub-hosted Ubuntu end-to-end coverage using the real local action and fresh Cargo caches: allow, both ask thresholds, block, non-execution, redacted reports, and missing-cache failure. The [merged 5B revision passed all seven cases](https://github.com/Vansh0Sharma/blastguard/actions/runs/36446270753); the release-preparation revision must pass again before tagging.
+- GitHub-hosted Ubuntu end-to-end coverage using the real local action and fresh Cargo caches: allow, both ask thresholds, block, non-execution, redacted reports, and missing-cache failure. The [merged 5B revision passed all seven cases](https://github.com/Vansh0Sharma/blastguard/actions/runs/36446270753); that historical result is not evidence for later revisions.
 
 ### Changed
 

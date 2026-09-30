@@ -1,0 +1,119 @@
+name: Release verification
+
+# Manual verification only. No publication, credentials, or artifact uploads.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Candidate / ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            deployment: ''
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            deployment: '15.0'
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            deployment: '15.0'
+    env:
+      RELEASE_VERSION: '0.1.2'
+      RUSTUP_TOOLCHAIN: '1.98.1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_TARGET_DIR: ${{ runner.temp }}/blastguard-build
+      TARGET: ${{ matrix.target }}
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the selected commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Pin the compiler and record build inputs
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt,clippy
+          rustup target add "$TARGET" --toolchain "$RUSTUP_TOOLCHAIN"
+          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          rustc -Vv
+          cargo --version
+          cc --version
+          python3 --version
+          shasum -a 256 Cargo.lock
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            xcodebuild -version
+            sw_vers
+            xcrun ld -version_details
+            xcrun --show-sdk-version
+          else
+            ldd --version
+          fi
+
+      - name: Validate native source and distribution checks
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets --all-features --target "$TARGET" -- -D warnings
+          cargo test --locked --all-targets --all-features --target "$TARGET"
+          python3 -B -m unittest discover -s tests -p distribution_test.py
+
+      - name: Inspect the source package from a disposable clean copy
+        run: |
+          package_check=$(mktemp -d "$RUNNER_TEMP/blastguard-package.XXXXXXXX")
+          python3 -B scripts/verify_distribution.py copy-source "$package_check/source"
+          (
+            cd "$package_check/source"
+            cargo package --list --locked > "$package_check/inventory.txt"
+            python3 -B scripts/verify_distribution.py check-list "$package_check/inventory.txt"
+            cargo package --locked --target-dir "$package_check/target"
+            python3 -B scripts/verify_distribution.py extract-crate \
+              "$package_check/target/package/blastguard-$RELEASE_VERSION.crate" \
+              "$package_check/extracted" --version "$RELEASE_VERSION"
+          )
+
+      - name: Build release twice in independent target directories
+        run: |
+          # Explicit controls only; never dump the runner environment/secrets.
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export LC_ALL=C TZ=UTC
+          printf 'SOURCE_DATE_EPOCH=%s\nCARGO_INCREMENTAL=%s\nMACOSX_DEPLOYMENT_TARGET=%s\n' \
+            "$SOURCE_DATE_EPOCH" "$CARGO_INCREMENTAL" "$MACOSX_DEPLOYMENT_TARGET"
+          cargo build --release --locked --target "$TARGET"
+          cargo build --release --locked --target "$TARGET" --target-dir "$RUNNER_TEMP/blastguard-rebuild"
+
+      - name: Build, checksum, extract, and smoke-test a candidate archive
+        run: |
+          python3 -B scripts/verify_distribution.py candidate \
+            "$CARGO_TARGET_DIR/$TARGET/release/blastguard" \
+            --version "$RELEASE_VERSION" --target "$TARGET" \
+            --output "$RUNNER_TEMP/blastguard-candidate"
+          (
+            cd "$RUNNER_TEMP/blastguard-candidate"
+            shasum -a 256 -c SHA256SUMS
+          )
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          git diff --check
+
+      # No continue-on-error: unknown differences/formats remain blocking.
+      # Original binaries stay intact; known metadata differences are NOT a pass
+      # for reproducibility or authorization to distribute public binaries.
+      - name: Report repeat-build evidence and block unexpected differences
+        run: |
+          python3 -B scripts/verify_distribution.py compare-builds \
+            "$CARGO_TARGET_DIR/$TARGET/release/blastguard" \
+            "$RUNNER_TEMP/blastguard-rebuild/$TARGET/release/blastguard" \
+            --target "$TARGET" --summary "$GITHUB_STEP_SUMMARY"
+
+      # No upload-artifact, attestation, release, registry login, or publish step.
+      # Candidate files exist only on the disposable runner; logs retain checksums.
