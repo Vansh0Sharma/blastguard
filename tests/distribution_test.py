@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 from pathlib import Path
+import re
 import subprocess
 import struct
 import sys
@@ -18,6 +19,89 @@ spec = importlib.util.spec_from_file_location(
 )
 distribution = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(distribution)
+
+
+def check_release_workflow(text):
+    """Narrow, dependency-free guard for this workflow, not a YAML validator.
+
+    Require canonical top-level keys and an exact manual-only trigger block.
+    Ban runner expressions everywhere (stricter than checking their scope):
+    temporary storage must use the shell's RUNNER_TEMP in a job step instead.
+    """
+    lines = [line.rstrip() for line in text.splitlines()
+             if line.strip() and not line.lstrip().startswith("#")]
+    distribution.require(not any("\t" in line for line in lines), "Use space-indented YAML")
+    # Also catches implicit `if: runner.os ...`, bracket access, and expressions
+    # split across lines; matrix.runner is a different, allowed context.
+    distribution.require(
+        re.search(r"(?<![\w.])runner\s*(?:\.|\[)", "\n".join(lines), re.IGNORECASE) is None,
+        "Use RUNNER_TEMP in a step, not the runner expression context",
+    )
+    top = [(index, line) for index, line in enumerate(lines) if not line.startswith(" ")]
+    distribution.require(all(re.fullmatch(r"[A-Za-z][\w-]*:.*", line) for _, line in top),
+                         "Unsupported workflow key syntax; review the static guard")
+    keys = [line.split(":", 1)[0] for _, line in top]
+    distribution.require(len(keys) == len(set(keys)), "Duplicate workflow key")
+    distribution.require("on" in keys, "Missing workflow_dispatch trigger")
+    position = keys.index("on")
+    start = top[position][0]
+    end = top[position + 1][0] if position + 1 < len(top) else len(lines)
+    distribution.require(lines[start:end] == ["on:", "  workflow_dispatch:"],
+                         "Release verification must have only workflow_dispatch")
+
+
+class ReleaseWorkflowTests(unittest.TestCase):
+    MANUAL = "on:\n  workflow_dispatch:\njobs:\n  native:\n    steps:\n      - run: echo checked\n"
+
+    def test_repository_workflow_is_manual_only_without_runner_expressions(self):
+        workflow = distribution.SOURCE / ".github/workflows/release-verification.yml"
+        if not workflow.exists() and (distribution.SOURCE / "Cargo.toml.orig").is_file():
+            # Workflows intentionally are NOT shipped in crates. All fixture
+            # regression cases below still run in extracted-package validation.
+            self.skipTest("Source package excludes workflows; validate the repository copy separately")
+        check_release_workflow(workflow.read_text(encoding="utf-8"))
+
+    def test_guard_allows_manual_workflow_and_shell_runner_temp(self):
+        check_release_workflow(self.MANUAL.replace(
+            "echo checked", 'mkdir "$RUNNER_TEMP/fixture"',
+        ).replace("    steps:", "    runs-on: ${{ matrix.runner }}\n    steps:"))
+
+    def test_guard_rejects_runner_context_in_non_step_scopes(self):
+        for field in (
+            "env:\n  BUILD: ${{ runner.temp }}\n",
+            "concurrency: ${{ runner.os }}\n",
+            "defaults:\n  run:\n    working-directory: ${{ runner.temp }}\n",
+        ):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "runner expression"):
+                check_release_workflow(field + self.MANUAL)
+        for field in (
+            "env:\n      BUILD: ${{ runner.temp }}",
+            "strategy:\n      matrix:\n        path: ['${{ runner.temp }}']",
+            "concurrency: ${{ runner.os }}",
+            "defaults:\n      run:\n        working-directory: ${{ runner.temp }}",
+            "if: runner.os == 'Linux'",
+            "name: ${{ runner['os'] }}",
+            "env:\n      BUILD: ${{\n        runner.temp\n        }}",
+        ):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "runner expression"):
+                check_release_workflow(self.MANUAL.replace("    steps:", f"    {field}\n    steps:"))
+
+    def test_guard_rejects_missing_manual_trigger_and_automatic_events(self):
+        for event in ("push", "pull_request", "pull_request_target", "release",
+                      "schedule", "workflow_run", "create", "delete"):
+            with self.subTest(event=event), self.assertRaises(ValueError):
+                check_release_workflow(self.MANUAL.replace("  workflow_dispatch:", f"  workflow_dispatch:\n  {event}:"))
+        for trigger in (
+            "", "on: push\n", "on: [workflow_dispatch, push]\n",
+            "on: {workflow_dispatch: null, release: null}\n",
+            "on:\n  push:\n    tags: ['v*']\n",
+            "on:\n  push:\n    branches: ['dependabot/**']\n",
+            "on:\n  workflow_dispatch:\non: push\n",
+            '"on":\n  workflow_dispatch:\n',
+            "? on\n: push\n",
+        ):
+            with self.subTest(trigger=trigger), self.assertRaises(ValueError):
+                check_release_workflow(self.MANUAL.replace("on:\n  workflow_dispatch:\n", trigger))
 
 
 def macho_fixture(uuid=b"0" * 16, cpu=0x100000c):

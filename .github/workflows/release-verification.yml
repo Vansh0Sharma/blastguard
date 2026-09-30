@@ -28,13 +28,18 @@ jobs:
       RELEASE_VERSION: '0.1.2'
       RUSTUP_TOOLCHAIN: '1.98.1'
       CARGO_INCREMENTAL: '0'
-      CARGO_TARGET_DIR: ${{ runner.temp }}/blastguard-build
       TARGET: ${{ matrix.target }}
       MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment }}
     defaults:
       run:
         shell: bash
     steps:
+      - name: Prepare temporary build storage
+        id: build_storage
+        run: |
+          build_dir=$(mktemp -d "$RUNNER_TEMP/blastguard-build.XXXXXXXX")
+          printf 'path=%s\n' "$build_dir" >> "$GITHUB_OUTPUT"
+
       - name: Check out the selected commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -62,6 +67,8 @@ jobs:
           fi
 
       - name: Validate native source and distribution checks
+        env:
+          CARGO_TARGET_DIR: ${{ steps.build_storage.outputs.path }}
         run: |
           cargo fmt --check
           cargo clippy --locked --all-targets --all-features --target "$TARGET" -- -D warnings
@@ -69,6 +76,8 @@ jobs:
           python3 -B -m unittest discover -s tests -p distribution_test.py
 
       - name: Inspect the source package from a disposable clean copy
+        env:
+          CARGO_TARGET_DIR: ${{ steps.build_storage.outputs.path }}
         run: |
           package_check=$(mktemp -d "$RUNNER_TEMP/blastguard-package.XXXXXXXX")
           python3 -B scripts/verify_distribution.py copy-source "$package_check/source"
@@ -83,6 +92,8 @@ jobs:
           )
 
       - name: Build release twice in independent target directories
+        env:
+          CARGO_TARGET_DIR: ${{ steps.build_storage.outputs.path }}
         run: |
           # Explicit controls only; never dump the runner environment/secrets.
           export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
@@ -93,6 +104,8 @@ jobs:
           cargo build --release --locked --target "$TARGET" --target-dir "$RUNNER_TEMP/blastguard-rebuild"
 
       - name: Build, checksum, extract, and smoke-test a candidate archive
+        env:
+          CARGO_TARGET_DIR: ${{ steps.build_storage.outputs.path }}
         run: |
           python3 -B scripts/verify_distribution.py candidate \
             "$CARGO_TARGET_DIR/$TARGET/release/blastguard" \
@@ -109,6 +122,8 @@ jobs:
       # Original binaries stay intact; known metadata differences are NOT a pass
       # for reproducibility or authorization to distribute public binaries.
       - name: Report repeat-build evidence and block unexpected differences
+        env:
+          CARGO_TARGET_DIR: ${{ steps.build_storage.outputs.path }}
         run: |
           python3 -B scripts/verify_distribution.py compare-builds \
             "$CARGO_TARGET_DIR/$TARGET/release/blastguard" \
