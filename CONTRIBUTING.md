@@ -52,11 +52,15 @@ The separate manual `Release verification` workflow tests the selected commit
 on native Linux x86_64, macOS arm64, and macOS Intel. It compares two clean-target
 builds and verifies disposable candidate archives. It does not publish, upload
 assets/attestations, or establish general reproducibility. Ordinary CI and the
-static Action's offline prerequisites are unchanged. Mach-O UUID and their verified
-signature-page hash differences produce a visible, non-blocking **unresolved**
-diagnostic requiring owner review before public binaries. Other differences or
+static Action's offline prerequisites are unchanged. Mach-O UUID differences
+(plus verified signature-page hash differences when present) produce a visible,
+non-blocking **unresolved** diagnostic requiring owner review before public
+binaries. Other differences or
 unknown/invalid metadata remain blocking; Linux still requires exact bytes.
 Never remove UUIDs/signatures or normalize artifacts to manufacture equality.
+Naturally unsigned Intel files may differ only in UUID bytes after layout
+validation; ARM64 still requires a valid signature. A malformed present signature
+must never fall back to unsigned handling, even for byte-identical inputs.
 
 ## Dependency review
 

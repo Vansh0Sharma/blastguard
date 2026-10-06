@@ -173,7 +173,9 @@ Runner labels and SDKs can change. Record exact inputs, then independently rebui
 on another matching host and investigate byte differences before broader claims.
 BlastGuard makes **no reproducible-build claim**. Keep the normal compiler/linker
 output intact, including UUIDs and linker-generated ad-hoc signatures. Those
-macOS candidates are not literally unsigned, even before Developer ID signing.
+Apple Silicon candidates are not literally unsigned, even before Developer ID
+signing. The observed Intel linker output is naturally unsigned; absence of a
+signature is not permission to remove one from a signed artifact.
 Future signing/notarization needs separate review; checksum the final distributed
 bytes, never a normalized substitute.
 
@@ -188,15 +190,31 @@ reproducibility check. Its versioned JSON and GitHub job summary distinguish:
   blocking failure. Linux still requires exact bytes. There is no blanket
   `continue-on-error` or exemption for the entire signature blob.
 
-The comparator accepts only thin 64-bit executables of the requested macOS
-architecture with a bounded, non-overlapping segment layout and the observed
-linker ad-hoc CodeDirectory format (v0x20400, flags 0x20002, SHA-256, 4 KiB pages,
-one CodeDirectory, no special slots). It verifies every signed page hash. The
-only exempt bytes are the 16-byte UUID and its corresponding 32-byte page hash.
+The comparator accepts only thin little-endian 64-bit executables of the requested
+macOS architecture with a bounded, non-overlapping segment layout. Present
+signatures must use the observed linker ad-hoc CodeDirectory format (v0x20400,
+flags 0x20002, SHA-256, 4 KiB pages, one CodeDirectory, no special slots). It verifies
+every signed page hash. The only exempt bytes are the 16-byte UUID and its
+corresponding 32-byte page hash.
 All other bytes, including signature flags, identifier, offsets, load commands,
 and other page hashes, must match. Changed formats require investigation, not an
 expanded exception by default. This is not publisher authentication, a general
 signature verifier, or permission to bypass Gatekeeper.
+
+Only generic Intel x86_64 (CPU subtype 3) may use the observed naturally unsigned
+layout with **no** `LC_CODE_SIGNATURE` command. This path validates the observed
+load-command set, segment bounds, bounded/disjoint linkedit tables, and a final
+string table ending at EOF (no orphaned signature tail). Every file-backed section
+must fit both EOF and its containing segment, agree with the segment's file/VM
+mapping, and not overlap the headers. The three zero-fill section types have no
+file-backed content but must fit their virtual segment; wrapping virtual ranges
+and unsupported high-VM mappings are rejected. An `LC_MAIN` entry point must lie
+past the headers and within executable, file-backed `__TEXT`, not at or beyond
+EOF. These checks precede both exact-match and UUID-only outcomes. Only UUID bytes
+are exempt; no signature verification is claimed for unsigned files. A present but
+malformed signature never falls back to this path, and ARM64 still requires its
+signature. Identical Mach-O inputs are validated too: byte equality cannot bypass
+header or signature-hash rejection.
 
 Run the same read-only comparison locally (no binary rewriting):
 
@@ -277,6 +295,55 @@ not a replacement for a linked CLI, nor authorization to disable signing.
 metadata was removed or normalized. This is local macOS evidence, not a hosted
 macOS 15, Intel, Linux, or cross-host result.
 
+### Intel parser correction evidence (2026-10-05)
+
+[Run 36663383132](https://github.com/Vansh0Sharma/blastguard/actions/runs/36663383132)
+on `09421e8975b904f7ac950bc19f1055bfd1f35b22` passed Linux and Apple Silicon.
+Its Intel job passed build/archive/checksum/extraction/smoke and failed only at
+comparison. Public job metadata confirmed that sequence; the run retained no
+artifacts, and unauthenticated full-log retrieval returned HTTP 403. Its exact
+binary bytes and native linker version were not available for inspection.
+
+The same rejection was reproduced with real BlastGuard binaries built for both
+targets on macOS 26.7 arm64, Rust 1.98.1 (LLVM 22.1.8), Apple clang 21.0.0,
+Apple ld 1267, SDK 26.5, deployment target 15.0. Each architecture used two fresh,
+different-length target paths, the unchanged lockfile/release profile, and:
+
+```sh
+cargo build --release --locked --target aarch64-apple-darwin
+cargo build --release --locked --target x86_64-apple-darwin
+```
+
+Builds ran offline with an isolated Cargo/rustup installation, `CARGO_INCREMENTAL=0`,
+`SOURCE_DATE_EPOCH=1790737825` (the inspected commit timestamp), `LC_ALL=C`, and
+`TZ=UTC`; no custom signing, stripping, or linker flags were added. These are
+cross-compiled Intel binaries, **not a native Intel runtime validation**.
+
+| Observation | ARM64 | Intel x86_64 |
+| --- | --- | --- |
+| Header magic / CPU / subtype | `0xfeedfacf` / `0x0100000c` / 0 | `0xfeedfacf` / `0x01000007` / 3 |
+| File type / header size | `MH_EXECUTE` / 32 bytes | `MH_EXECUTE` / 32 bytes |
+| File size (each build) | 4,769,680 bytes | 4,936,552 bytes |
+| UUID command / payload | offset 1760 / `[1768,1784)` | offset 1760 / `[1768,1784)` |
+| Signature | Command at 2000; valid ad-hoc SHA-256 pages | No signature command; `codesign -dv` reports unsigned |
+| Differing bytes | 16 UUID + 32 UUID-page hash | 16 UUID only |
+| Original comparator | Unresolved metadata-only diagnostic | Rejected at mandatory-signature check |
+| Corrected comparator | Unchanged unresolved diagnostic | Unresolved UUID-only diagnostic |
+
+The Intel string table ends at EOF: offset 4,934,472 plus 2,080 bytes equals
+4,936,552. Its first/second executable SHA-256 values are
+`bf62b3a147c285d54fcf7a6769cabdf0a7fb60bb163eda5f7900887cf3be51a2` and
+`e4195c46cd45f7cf5b77ff0902244d48da9b803f07b7d90fcbb112ddc8f3d8aa`.
+Both ARM64 signatures passed read-only `codesign --verify --strict`. All four
+original executable hashes were unchanged by inspection/comparison. No signature
+was removed, disabled, added, or normalized; there is no reproducibility claim.
+
+The reproduced defect is architecture-independent signature-required logic,
+not incorrect endianness, CPU constants, or 64-bit header decoding. Apple documents
+ad-hoc signing as the default for Apple Silicon; naturally unsigned Intel output
+must be distinguished from a corrupt embedded signature. Hosted confirmation of
+the corrected comparator on the native Intel runner remains an owner gate.
+
 ## Remaining release gates and boundaries
 
 - Review the exact candidate/version and extracted-package results.
@@ -314,3 +381,8 @@ Checked 2026-09-29:
 - [SOURCE_DATE_EPOCH specification](https://reproducible-builds.org/docs/source-date-epoch/)
 - [Apple code-signature structures](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/cs_blobs.h)
 - Installed Apple `man ld`, section `-reproducible` (ld 1267).
+
+Additionally checked 2026-10-05 for the Intel parser correction:
+
+- [Apple Mach-O structures and load commands](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h)
+- [Apple linker ad-hoc signing defaults](https://github.com/apple-oss-distributions/ld64/blob/main/doc/man/man1/ld-classic.1)

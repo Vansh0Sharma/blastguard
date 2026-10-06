@@ -131,6 +131,59 @@ def seal_fixture(data):
     return data
 
 
+def unsigned_intel_fixture(uuid=b"0" * 16):
+    # Construct unsigned data directly: never strip a real or fixture signature.
+    # Modern x86_64 load commands, bounded linkedit tables, final string table.
+    data = bytearray(4160)
+    struct.pack_into("<8I", data, 0, 0xfeedfacf, 0x1000007, 3, 2, 6, 288, 0x200085, 0)
+    for offset, name, start, size in ((32, b"__TEXT", 0, 4096), (104, b"__LINKEDIT", 4096, 64)):
+        struct.pack_into("<II16sQQQQIIII", data, offset, 0x19, 72, name, 0, size,
+                         start, size, 1, 1, 0, 0)
+    struct.pack_into("<II16s", data, 176, 0x1b, 24, uuid)
+    struct.pack_into("<6I", data, 200, 0x2, 24, 4112, 1, 4136, 24)
+    struct.pack_into("<20I", data, 224, 0xb, 80, 0, 0, 0, 1, 1, 0,
+                     0, 0, 0, 0, 0, 0, 4128, 2, 0, 0, 0, 0)
+    struct.pack_into("<4I", data, 304, 0x26, 16, 4096, 16)
+    return data
+
+
+def unsigned_intel_sections_fixture(uuid=b"0" * 16, zero_type=1, zero_size=8192):
+    # Data only, never executed. TEXT has two file-backed sections, DATA one,
+    # BSS one virtual-only section after the other VM segments. LINKEDIT follows
+    # DATA in the file, without allocating bytes for BSS (including GB zero-fill).
+    base = 0x100000000
+    commands = []
+    for name, vm, memory_size, start, size, protection, sections in (
+        (b"__TEXT", base, 4096, 0, 4096, 5,
+         ((b"__text", base + 1024, 256, 1024, 0x80000400),
+          (b"__const", base + 2048, 256, 2048, 0))),
+        (b"__DATA", base + 4096, 4096, 4096, 4096, 3,
+         ((b"__data", base + 4096, 128, 4096, 0),)),
+        (b"__LINKEDIT", base + 8192, 4096, 8192, 64, 1, ()),
+        (b"__BSS", base + 12288, zero_size, 0, 0, 3,
+         ((b"__bss", base + 12288, zero_size, 0, zero_type),)),
+    ):
+        command = struct.pack("<II16s4Q4I", 0x19, 72 + 80 * len(sections), name,
+                              vm, memory_size, start, size, protection, protection, len(sections), 0)
+        for section_name, address, extent, file_offset, flags in sections:
+            command += struct.pack("<16s16sQQ8I", section_name, name, address, extent,
+                                   file_offset, 0, 0, 0, flags, 0, 0, 0)
+        commands.append(command)
+    commands.extend((
+        struct.pack("<II16s", 0x1b, 24, uuid),
+        struct.pack("<6I", 0x2, 24, 8208, 1, 8232, 24),
+        struct.pack("<20I", 0xb, 80, 0, 0, 0, 1, 1, 0,
+                    0, 0, 0, 0, 0, 0, 8224, 2, 0, 0, 0, 0),
+        struct.pack("<4I", 0x26, 16, 8192, 16),
+        struct.pack("<IIQQ", 0x80000028, 24, 1024, 0),
+    ))
+    table = b"".join(commands)
+    data = bytearray(8256)
+    struct.pack_into("<8I", data, 0, 0xfeedfacf, 0x1000007, 3, 2, len(commands), len(table), 0x200085, 0)
+    data[32:32 + len(table)] = table
+    return data
+
+
 class DistributionTests(unittest.TestCase):
     def compare(self, first, second, target="aarch64-apple-darwin"):
         with tempfile.TemporaryDirectory() as temporary:
@@ -155,6 +208,201 @@ class DistributionTests(unittest.TestCase):
             self.assertFalse(report["reproducibility_claim"])
             self.assertEqual(set(report["differing_bytes"]), {"LC_UUID", "LC_CODE_SIGNATURE_UUID_page_hash"})
             self.assertEqual(len(report["differing_bytes"]["LC_UUID"]), 16)
+
+    def test_naturally_unsigned_intel_allows_only_uuid_differences(self):
+        first, second = unsigned_intel_fixture(), unsigned_intel_fixture(b"1" * 16)
+        report = self.compare(first, second, "x86_64-apple-darwin")
+        self.assertEqual(report["status"], "macho_metadata_only_unresolved")
+        self.assertFalse(report["reproducibility_claim"])
+        self.assertEqual(set(report["differing_bytes"]), {"LC_UUID"})
+        self.assertEqual(report["regions"], {"LC_UUID": (184, 200)})
+        self.assertEqual(self.compare(first, first, "x86_64-apple-darwin")["status"], "exact_match")
+        for offset in (1024, 4096, 4159):  # text, function starts, string table
+            changed = unsigned_intel_fixture(b"1" * 16)
+            changed[offset] ^= 1
+            self.assertEqual(self.compare(first, changed, "x86_64-apple-darwin")["status"], "unexpected_difference")
+
+    def test_unsigned_is_not_a_fallback_for_arm_or_unsupported_intel_headers(self):
+        for offset, value in ((0, 0xcafebabe), (0, 0xcffaedfe), (8, 8), (12, 6), (28, 1)):
+            changed = unsigned_intel_fixture(b"1" * 16)
+            struct.pack_into("<I", changed, offset, value)
+            self.assertEqual(self.compare(unsigned_intel_fixture(), changed, "x86_64-apple-darwin")["status"], "unsupported_or_invalid_macho")
+        arm = unsigned_intel_fixture()
+        struct.pack_into("<II", arm, 4, 0x100000c, 0)
+        self.assertEqual(self.compare(arm, arm)["status"], "unsupported_or_invalid_macho")
+        self.assertEqual(self.compare(unsigned_intel_fixture(), unsigned_intel_fixture())["status"], "unsupported_or_invalid_macho")
+
+    def test_unsigned_intel_rejects_malformed_commands_and_linkedit_bounds(self):
+        for offset, value in (
+            (16, 7), (20, 280), (180, 0), (304, 0x77), (304, 0x1b),
+            (144, 0), (152, 0xffffffff), (208, 4113), (208, 32),
+            (212, 0xffffffff), (216, 4100), (220, 0xffffffff),
+            (236, 0xffffffff), (280, 32), (284, 0xffffffff),
+            (312, 32), (312, 4112), (316, 0xffffffff),
+        ):
+            with self.subTest(offset=offset, value=value):
+                changed = unsigned_intel_fixture(b"1" * 16)
+                struct.pack_into("<I", changed, offset, value)
+                self.assertEqual(self.compare(unsigned_intel_fixture(), changed, "x86_64-apple-darwin")["status"], "unsupported_or_invalid_macho")
+        # An unreferenced signature-like tail cannot masquerade as unsigned.
+        tail = unsigned_intel_fixture() + b"\xfa\xde\x0c\xc0" + bytes(180)
+        struct.pack_into("<Q", tail, 152, len(tail) - 4096)
+        self.assertEqual(self.compare(tail, tail, "x86_64-apple-darwin")["status"], "unsupported_or_invalid_macho")
+
+    def test_present_intel_signature_must_validate_even_for_identical_files(self):
+        original = macho_fixture(cpu=0x1000007)
+        for offset, value in ((212, 0), (208, 0), (8192, 0), (8192 + 120, 0)):
+            changed = bytearray(original)
+            struct.pack_into("<I", changed, offset, value)
+            self.assertEqual(self.compare(original, changed, "x86_64-apple-darwin")["status"], "unsupported_or_invalid_macho")
+            self.assertEqual(self.compare(changed, changed, "x86_64-apple-darwin")["status"], "unsupported_or_invalid_macho")
+        changed = bytearray(original)
+        struct.pack_into("<I", changed, 200, 0x77)  # disguised signature command
+        self.assertEqual(self.compare(changed, changed, "x86_64-apple-darwin")["status"], "unsupported_or_invalid_macho")
+
+    def test_unsigned_intel_checks_variable_load_command_bounds(self):
+        def with_command(command):
+            data = unsigned_intel_fixture()
+            struct.pack_into("<II", data, 16, 7, 288 + len(command))
+            data[320:320 + len(command)] = command
+            return data
+
+        good = (
+            struct.pack("<III4s", 0xe, 16, 12, b"/a\0\0"),
+            struct.pack("<6I8s", 0xc, 32, 24, 0, 0, 0, b"/lib\0\0\0\0"),
+            struct.pack("<6I", 0x32, 24, 1, 0xf0000, 0xf0000, 0),
+        )
+        for command in good:
+            data = with_command(command)
+            self.assertEqual(self.compare(data, data, "x86_64-apple-darwin")["status"], "exact_match")
+        bad = (
+            struct.pack("<III4s", 0xc, 16, 12, b"/a\0\0"),
+            struct.pack("<III4s", 0xe, 16, 100, b"/a\0\0"),
+            struct.pack("<III4s", 0xe, 16, 12, b"aaaa"),
+            struct.pack("<6I", 0x32, 24, 2, 0xf0000, 0xf0000, 0),
+            struct.pack("<6I", 0x32, 24, 1, 0xf0000, 0xf0000, 100),
+        )
+        for command in bad:
+            data = with_command(command)
+            self.assertEqual(self.compare(data, data, "x86_64-apple-darwin")["status"], "unsupported_or_invalid_macho")
+
+    def assert_unsigned_sections_rejected_before_matching(self, data):
+        different_uuid = bytearray(data)
+        different_uuid[648:664] = b"1" * 16
+        for second in (data, different_uuid):
+            with self.subTest(uuid_differs=second != data):
+                report = self.compare(data, second, "x86_64-apple-darwin")
+                self.assertEqual(report["status"], "unsupported_or_invalid_macho")
+                self.assertFalse(report["reproducibility_claim"])
+
+    def test_unsigned_section_and_entrypoint_fixtures_remain_uuid_only(self):
+        for section_type, size in ((1, 8192), (0xc, (1 << 32) + 8192), (0x12, 8192)):
+            with self.subTest(zero_fill_type=section_type):
+                first = unsigned_intel_sections_fixture(zero_type=section_type, zero_size=size)
+                second = unsigned_intel_sections_fixture(b"1" * 16, section_type, size)
+                self.assertEqual(self.compare(first, first, "x86_64-apple-darwin")["status"], "exact_match")
+                report = self.compare(first, second, "x86_64-apple-darwin")
+                self.assertEqual(report["status"], "macho_metadata_only_unresolved")
+                self.assertEqual(report["regions"], {"LC_UUID": (648, 664)})
+                self.assertFalse(report["reproducibility_claim"])
+        # A valid metadata change or code change still is not a UUID exception.
+        first = unsigned_intel_sections_fixture()
+        for field, fmt, value in ((1024, "<B", 1), (792, "<Q", 1025)):
+            changed = unsigned_intel_sections_fixture(b"1" * 16)
+            struct.pack_into(fmt, changed, field, value)
+            self.assertEqual(self.compare(first, changed, "x86_64-apple-darwin")["status"], "unexpected_difference")
+
+    def test_unsigned_section_ranges_reject_identical_and_uuid_different_malformed_pairs(self):
+        # Section records start at 104, 184 (TEXT), 336 (DATA), and 560 (BSS).
+        for field, fmt, value in (
+            (152, "<I", 8257), (152, "<I", 0xffffffff), (152, "<I", 8256),
+            (144, "<Q", 0xffffffffffffffff), (144, "<Q", 8256),
+            (152, "<I", 4096),  # within EOF but outside the containing TEXT
+            (232, "<I", 8257), (384, "<I", 8257),  # later section and segment
+            (384, "<I", 1024),  # DATA must not point into another segment
+            (152, "<I", 1025),  # file/VM mapping disagreement
+            (152, "<I", 100),  # section content cannot alias load commands
+            (136, "<Q", 0xffffffffffffffff), (120, "<16s", b"__DATA"),
+            (168, "<I", 0xff),  # unknown section type cannot imply zero-fill
+        ):
+            with self.subTest(field=field, value=value):
+                changed = unsigned_intel_sections_fixture()
+                struct.pack_into(fmt, changed, field, value)
+                self.assert_unsigned_sections_rejected_before_matching(changed)
+        # Empty ranges still cannot point beyond EOF.
+        changed = unsigned_intel_sections_fixture()
+        struct.pack_into("<QI", changed, 144, 0, 8257)
+        self.assert_unsigned_sections_rejected_before_matching(changed)
+
+    def test_unsigned_zero_fill_is_virtual_only_but_must_fit_segment(self):
+        for section_type in (1, 0xc, 0x12):
+            for field, fmt, value in (
+                (600, "<Q", 8193), (600, "<Q", 0xffffffffffffffff),
+                (592, "<Q", 0xffffffffffffffff),
+                (512, "<Q", 0xffffffffffffffff),  # wrapping segment VM range
+                (592, "<Q", 0),  # before the containing VM segment
+            ):
+                with self.subTest(section_type=section_type, field=field, value=value):
+                    changed = unsigned_intel_sections_fixture(zero_type=section_type)
+                    struct.pack_into(fmt, changed, field, value)
+                    self.assert_unsigned_sections_rejected_before_matching(changed)
+        # Thread-local REGULAR is file-backed, unlike THREAD_LOCAL_ZEROFILL.
+        changed = unsigned_intel_sections_fixture()
+        struct.pack_into("<I", changed, 168, 0x11)
+        struct.pack_into("<I", changed, 152, 8257)
+        self.assert_unsigned_sections_rejected_before_matching(changed)
+
+    def test_unsigned_entrypoint_rejects_identical_and_uuid_different_malformed_pairs(self):
+        for entry in (0, 31, 807, 4096, 8255, 8256, 8257, 0xffffffffffffffff):
+            with self.subTest(entry=entry):
+                changed = unsigned_intel_sections_fixture()
+                struct.pack_into("<Q", changed, 792, entry)
+                self.assert_unsigned_sections_rejected_before_matching(changed)
+        for field, value in ((88, 1), (92, 1), (100, 1), (64, 1024)):
+            with self.subTest(field=field):
+                changed = unsigned_intel_sections_fixture()
+                struct.pack_into("<I", changed, field, value)
+                self.assert_unsigned_sections_rejected_before_matching(changed)
+        for entry in (1024, 4095):  # within executable file-backed TEXT
+            valid = unsigned_intel_sections_fixture()
+            struct.pack_into("<Q", valid, 792, entry)
+            self.assertEqual(self.compare(valid, valid, "x86_64-apple-darwin")["status"], "exact_match")
+
+    def test_present_invalid_signature_cannot_use_valid_unsigned_section_layout(self):
+        for start, size in ((0, 0), (8256, 0), (8256, 184), (1024, 0xffffffff)):
+            with self.subTest(start=start, size=size):
+                changed = unsigned_intel_sections_fixture()
+                struct.pack_into("<II", changed, 16, 10, 792)  # add one 16-byte command
+                struct.pack_into("<4I", changed, 808, 0x1d, 16, start, size)
+                self.assert_unsigned_sections_rejected_before_matching(changed)
+
+    def test_unsigned_intel_cli_warns_without_claim_and_blocks_code_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first, second, summary = (root / name for name in ("one", "two", "summary"))
+            first.write_bytes(unsigned_intel_fixture())
+            changed = unsigned_intel_fixture(b"1" * 16)
+            second.write_bytes(changed)
+            command = [sys.executable, "-B", str(distribution.SOURCE / "scripts/verify_distribution.py"),
+                       "compare-builds", str(first), str(second), "--target", "x86_64-apple-darwin", "--summary", str(summary)]
+            result = subprocess.run(command, capture_output=True, check=False)
+            self.assertEqual(result.returncode, 0)
+            self.assertIn(b'"reproducibility_claim": false', result.stdout)
+            self.assertIn(b"::warning::Reproducibility UNRESOLVED", result.stdout)
+            self.assertNotIn(b"LC_CODE_SIGNATURE_UUID_page_hash", result.stdout)
+            self.assertIn("NOT a reproducibility pass", summary.read_text())
+            changed[1024] ^= 1
+            second.write_bytes(changed)
+            result = subprocess.run(command, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b"::error::BLOCKED", result.stdout)
+
+    def test_exact_match_does_not_bypass_macho_validation(self):
+        for data in (b"", b"not Mach-O", macho_fixture()[:-1]):
+            self.assertEqual(self.compare(data, data)["status"], "unsupported_or_invalid_macho")
+        changed = macho_fixture()
+        changed[8192 + 152] ^= 1
+        self.assertEqual(self.compare(changed, changed)["status"], "unsupported_or_invalid_macho")
 
     def test_non_metadata_changes_block_even_with_recomputed_signature(self):
         for offset in (300, 5000, 8192 + 112):  # text, linkedit, identifier

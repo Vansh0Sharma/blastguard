@@ -204,7 +204,7 @@ def candidate(binary, target, version, output):
 
 
 def macho_metadata(data, target):
-    """Recognize only the observed thin Mach-O/linker ad-hoc signature format.
+    """Recognize observed thin Mach-O: linker ad-hoc or naturally unsigned Intel.
 
     Read-only: do not normalize, rewrite UUIDs, strip, or re-sign anything.
     This is a narrow difference classifier, not a general code-signing verifier.
@@ -215,17 +215,19 @@ def macho_metadata(data, target):
         return struct.unpack_from(fmt, data, offset)
 
     cpu = {"aarch64-apple-darwin": 0x100000c, "x86_64-apple-darwin": 0x1000007}
-    magic, architecture, _, kind, count, size, _, _ = unpack("<8I", 0)
+    magic, architecture, subtype, kind, count, size, _, reserved = unpack("<8I", 0)
     require(magic == 0xfeedfacf and architecture == cpu.get(target) and kind == 2,
             "Unsupported Mach-O header")
     end = 32 + size
     require(0 < count <= 4096 and end <= len(data), "Invalid load commands")
     cursor, uuid, signature = 32, None, None
     segments = {}
+    commands = {}
     for _ in range(count):
         command, length = unpack("<II", cursor)
         require(length >= 8 and length % 8 == 0 and cursor + length <= end,
                 "Invalid load command bounds")
+        commands.setdefault(command, []).append((cursor, length))
         if command == 0x1b:  # LC_UUID
             require(uuid is None and length == 24, "Invalid UUID command")
             uuid = (cursor + 8, cursor + 24)
@@ -241,19 +243,112 @@ def macho_metadata(data, target):
                     and start + extent <= len(data), "Invalid segment bounds")
             segments[name] = (start, start + extent)
         cursor += length
-    require(cursor == end and uuid is not None and signature is not None,
+    require(cursor == end and uuid is not None,
             "Missing or malformed Mach-O metadata")
-    sig_start, sig_size = signature
-    require(sig_start >= end and sig_start + sig_size == len(data) and sig_size >= 108,
-            "Invalid signature bounds")
     require(b"__TEXT" in segments and b"__LINKEDIT" in segments,
             "Missing required segments")
     require(segments[b"__TEXT"][0] == 0 and segments[b"__TEXT"][1] >= end
-            and end <= segments[b"__LINKEDIT"][0] <= sig_start
-            and segments[b"__LINKEDIT"][1] == len(data), "Invalid signature segment")
+            and end <= segments[b"__LINKEDIT"][0] < len(data)
+            and segments[b"__LINKEDIT"][1] == len(data), "Invalid linkedit segment")
     occupied = sorted(span for span in segments.values() if span[0] != span[1])
     require(all(left[1] <= right[0] for left, right in zip(occupied, occupied[1:])),
             "Overlapping Mach-O segments")
+
+    if signature is None:
+        # Apple ld naturally emits unsigned x86_64 executables. This is NOT a
+        # fallback for a malformed/present signature, nor permission to strip one.
+        require(target == "x86_64-apple-darwin" and subtype == 3 and reserved == 0,
+                "Missing required Mach-O signature")
+        # Recognize only the observed modern Intel executable layout. A renamed
+        # signature command or orphaned signature tail must not become unsigned.
+        fixed = {0x2: 24, 0xb: 80, 0x1b: 24, 0x2a: 16, 0x80000028: 24,
+                 0x26: 16, 0x29: 16, 0x80000033: 16, 0x80000034: 16}
+        require(set(commands) <= set(fixed) | {0x19, 0xc, 0xe, 0x32},
+                "Unsupported unsigned Mach-O load command")
+        for code, length in fixed.items():
+            entries = commands.get(code, [])
+            require(len(entries) <= 1 and all(size == length for _, size in entries),
+                    "Invalid unsigned Mach-O load command")
+        text_executable = False
+        for offset, _ in commands[0x19]:  # LC_SEGMENT_64, already bounded above
+            name = data[offset + 8:offset + 24]
+            vm_start, vm_size, file_start, file_size, maximum, initial, sections, flags = unpack(
+                "<4Q4I", offset + 24)
+            # Python integers do not wrap. Also reject ranges that would overflow
+            # the format's uint64 address space, and unsupported high-VM mapping.
+            require(vm_size <= 0xffffffffffffffff - vm_start and file_size <= vm_size
+                    and not flags & 1, "Invalid unsigned Mach-O segment mapping")
+            vm_end, file_end = vm_start + vm_size, file_start + file_size
+            if name.rstrip(b"\0") == b"__TEXT":
+                text_executable = bool(maximum & initial & 4)  # VM_PROT_EXECUTE
+            for index in range(sections):
+                section = offset + 72 + 80 * index
+                section_segment = data[section + 16:section + 32]
+                address, extent, start = unpack("<QQI", section + 32)
+                section_flags, = unpack("<I", section + 64)
+                section_type = section_flags & 0xff
+                require(section_segment == name and section_type <= 0x16
+                        and vm_start <= address <= vm_end and extent <= vm_end - address,
+                        "Invalid unsigned Mach-O section mapping")
+                # S_ZEROFILL, S_GB_ZEROFILL, S_THREAD_LOCAL_ZEROFILL occupy VM
+                # only: their offset does not describe file-backed content.
+                if section_type in (0x1, 0xc, 0x12):
+                    continue
+                require(end <= start <= len(data) and extent <= len(data) - start
+                        and file_start <= start <= file_end and extent <= file_end - start
+                        and address - vm_start == start - file_start,
+                        "Invalid unsigned Mach-O section file bounds")
+        if 0x80000028 in commands:  # LC_MAIN: file (__TEXT) offset, not a VM address
+            entry, = unpack("<Q", commands[0x80000028][0][0] + 8)
+            require(text_executable and end <= entry < len(data)
+                    and segments[b"__TEXT"][0] <= entry < segments[b"__TEXT"][1],
+                    "Invalid unsigned Mach-O entry point")
+        for code, minimum, string_field in ((0xc, 24, 8), (0xe, 12, 8)):
+            for offset, length in commands.get(code, []):
+                require(length >= minimum, "Truncated unsigned Mach-O string command")
+                string_offset, = unpack("<I", offset + string_field)
+                require(minimum <= string_offset < length
+                        and b"\0" in data[offset + string_offset:offset + length],
+                        "Invalid unsigned Mach-O string command")
+        for offset, length in commands.get(0x32, []):
+            require(length >= 24, "Truncated unsigned Mach-O build version")
+            platform, _, _, tools = unpack("<4I", offset + 8)
+            require(platform == 1 and length == 24 + tools * 8,
+                    "Unsupported unsigned Mach-O build version")
+        require(0x2 in commands, "Unsigned Mach-O missing symbol table")
+        symoff, symbols, stroff, strings = unpack("<4I", commands[0x2][0][0] + 8)
+        link_start = segments[b"__LINKEDIT"][0]
+        require(link_start <= symoff <= symoff + 16 * symbols <= stroff
+                and symoff % 8 == 0 and strings > 0 and stroff + strings == len(data),
+                "Invalid unsigned Mach-O symbol/string bounds")
+        # Linkedit payloads must be bounded, disjoint, and end with the string
+        # table. Reject corrupt offsets even when the only differing byte is UUID.
+        spans = [(symoff, symoff + 16 * symbols), (stroff, len(data))]
+        for code in (0x26, 0x29, 0x80000033, 0x80000034):
+            if code in commands:
+                offset, length = unpack("<II", commands[code][0][0] + 8)
+                require((offset == 0 and length == 0)
+                        or link_start <= offset <= offset + length <= symoff,
+                        "Invalid unsigned Mach-O linkedit bounds")
+                spans.append((offset, offset + length))
+        if 0xb in commands:
+            symbols_info = unpack("<18I", commands[0xb][0][0] + 8)
+            require(all(symbols_info[i] + symbols_info[i + 1] <= symbols for i in (0, 2, 4))
+                    and not any(symbols_info[6:12] + symbols_info[14:18]),
+                    "Unsupported unsigned Mach-O dynamic symbol table")
+            offset, entries = symbols_info[12:14]
+            require((offset == 0 and entries == 0)
+                    or (symoff + 16 * symbols <= offset <= offset + 4 * entries <= stroff
+                        and offset % 4 == 0), "Invalid unsigned Mach-O indirect symbol bounds")
+            spans.append((offset, offset + 4 * entries))
+        spans = sorted(span for span in spans if span[0] != span[1])
+        require(all(left[1] <= right[0] for left, right in zip(spans, spans[1:])),
+                "Overlapping unsigned Mach-O linkedit payloads")
+        return {"LC_UUID": uuid}
+
+    sig_start, sig_size = signature
+    require(sig_start >= end and sig_start + sig_size == len(data) and sig_size >= 108
+            and segments[b"__LINKEDIT"][0] <= sig_start, "Invalid signature bounds")
 
     # Only one CodeDirectory, SHA-256/4 KiB pages, no CMS, entitlements or
     # special slots. Never exempt the entire LC_CODE_SIGNATURE payload.
@@ -293,15 +388,18 @@ def compare_builds(first, second, target):
         "status": "unexpected_difference",
         "reproducibility_claim": False,
     }
-    if inputs[0] == inputs[1]:
-        report["status"] = "exact_match"
-        return report
+    regions = None
     if target.endswith("-apple-darwin") and len(inputs[0]) == len(inputs[1]):
         try:
             regions = [macho_metadata(data, target) for data in inputs]
         except (ValueError, struct.error):
             report["status"] = "unsupported_or_invalid_macho"
             return report
+    # Equality is not a bypass for invalid Mach-O or corrupt signature hashes.
+    if inputs[0] == inputs[1]:
+        report["status"] = "exact_match"
+        return report
+    if regions is not None:
         if regions[0] == regions[1]:
             differences = {name: [] for name in regions[0]}
             for offset, (left, right) in enumerate(zip(*inputs)):
@@ -323,7 +421,7 @@ def report_comparison(report, summary=None):
     status = report["status"]
     messages = {
         "exact_match": "Exact repeat-build bytes match for this pair only; no general reproducibility claim.",
-        "macho_metadata_only_unresolved": "Reproducibility UNRESOLVED: UUID/signature-page differences only. Non-blocking diagnostic, NOT a reproducibility pass. Explicit owner review required before public binaries.",
+        "macho_metadata_only_unresolved": "Reproducibility UNRESOLVED: UUID (and, when present, its verified signature-page hash) differences only. Non-blocking diagnostic, NOT a reproducibility pass. Explicit owner review required before public binaries.",
         "unexpected_difference": "BLOCKED: unexpected repeat-build differences; owner investigation required.",
         "unsupported_or_invalid_macho": "BLOCKED: invalid or unsupported Mach-O/signature; owner investigation required.",
     }
